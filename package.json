@@ -4,20 +4,22 @@
   "description": "Load balancer for Cosmos SDK RPC endpoints",
   "main": "balancer.mjs",
   "scripts": {
-    "start": "node balancer.mjs",
-    "dev": "nodemon balancer.mjs",
-    "test": "mocha --require esm --recursive test/"
+    "build": "tsc",
+    "start": "node dist/balancer.js"
   },
   "type": "module",
   "dependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.9",
     "express": "^4.19.2",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "typescript": "^5.5.2"
   },
   "devDependencies": {
-    "nodemon": "^2.0.7",
-    "mocha": "^8.4.0",
     "chai": "^4.3.4",
-    "esm": "^3.2.25"
+    "esm": "^3.2.25",
+    "mocha": "^8.4.0",
+    "nodemon": "^2.0.7"
   },
   "author": "Cordt Hanson",
   "license": "MIT",

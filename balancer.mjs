@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import fetch from 'node-fetch';
 import { fileURLToPath } from 'url';
-import https from 'https';
 
 const app = express();
 const port = 3000;
@@ -11,11 +10,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const chainsFilePath = path.resolve(__dirname, 'chains.json');
 const chainRegistryBaseUrl = 'https://raw.githubusercontent.com/cosmos/chain-registry/master/';
-const agent = new https.Agent({ rejectUnauthorized: false });
-
-let chainCounters = {}; // to keep track of the next RPC address to use
-let failureCounts = {}; // to track failures for each RPC endpoint
-const failureThreshold = 3; // number of failures before blacklisting
 
 const getChainData = async (chainName) => {
   try {
@@ -60,8 +54,10 @@ const updateChainData = async (chainName) => {
     const existingChain = chains.chains[existingChainIndex];
     console.log(`Existing chain found for ${chainName}:`, existingChain);
 
+    // Update only if there are new addresses
     const updatedRpcAddresses = Array.from(new Set([...existingChain['rpc-addresses'], ...chainData['rpc-addresses']]));
 
+    // Force update if there is no timestamp
     if (!existingChain['last_updated'] || existingChain['chain-id'] !== chainData['chain-id'] || !arraysEqual(existingChain['rpc-addresses'], updatedRpcAddresses)) {
       chains.chains[existingChainIndex] = {
         ...chainData,
@@ -108,6 +104,7 @@ const getChainEntry = async (chainName) => {
   const chainEntry = chains.chains.find(chain => chain.name === chainName);
   console.log(`Chain entry found for ${chainName}:`, chainEntry);
 
+  // Force update if there is no timestamp
   if (!chainEntry || !chainEntry['last_updated'] || (Date.now() - chainEntry['last_updated'] > 12 * 60 * 60 * 1000)) {
     console.log(`Chain entry not found or outdated for ${chainName}, updating...`);
     return await updateChainData(chainName);
@@ -116,30 +113,16 @@ const getChainEntry = async (chainName) => {
   return chainEntry;
 };
 
-const getNextRpcAddress = (chainName, chainEntry) => {
-  if (!chainCounters[chainName]) {
-    chainCounters[chainName] = 0;
-  }
-  const rpcAddresses = chainEntry['rpc-addresses'];
-  const validRpcAddresses = rpcAddresses.filter(addr => !(failureCounts[addr] && failureCounts[addr] >= failureThreshold));
-
-  if (validRpcAddresses.length === 0) {
-    console.error(`All RPC addresses for ${chainName} are blacklisted`);
-    return null;
-  }
-
-  const nextIndex = chainCounters[chainName] % validRpcAddresses.length;
-  chainCounters[chainName]++;
-  return validRpcAddresses[nextIndex];
+const cycleRpcAddresses = (rpcAddresses) => {
+  let index = 0;
+  return () => {
+    const rpcAddress = rpcAddresses[index];
+    index = (index + 1) % rpcAddresses.length;
+    return rpcAddress;
+  };
 };
 
-const handleRpcFailure = (rpcUrl) => {
-  if (!failureCounts[rpcUrl]) {
-    failureCounts[rpcUrl] = 0;
-  }
-  failureCounts[rpcUrl]++;
-  console.log(`RPC address ${rpcUrl} has failed ${failureCounts[rpcUrl]} times`);
-};
+const rpcCyclers = {};
 
 app.get('/rpc-lb/:chainName', async (req, res) => {
   const chainName = req.params.chainName;
@@ -150,16 +133,15 @@ app.get('/rpc-lb/:chainName', async (req, res) => {
     return;
   }
 
-  const rpcAddress = getNextRpcAddress(chainName, chainEntry);
-  if (!rpcAddress) {
-    res.status(503).send('All RPC addresses are blacklisted');
-    return;
+  if (!rpcCyclers[chainName]) {
+    rpcCyclers[chainName] = cycleRpcAddresses(chainEntry['rpc-addresses']);
   }
 
+  const rpcAddress = rpcCyclers[chainName]();
   res.json({ rpcAddress });
 });
 
-app.all('/rpc-lb/:chainName/*', async (req, res) => {
+app.post('/api-query/:chainName', async (req, res) => {
   const chainName = req.params.chainName;
   const chainEntry = await getChainEntry(chainName);
 
@@ -168,33 +150,29 @@ app.all('/rpc-lb/:chainName/*', async (req, res) => {
     return;
   }
 
-  const rpcUrl = getNextRpcAddress(chainName, chainEntry);
-  if (!rpcUrl) {
-    res.status(503).send('All RPC addresses are blacklisted');
-    return;
+  if (!rpcCyclers[chainName]) {
+    rpcCyclers[chainName] = cycleRpcAddresses(chainEntry['rpc-addresses']);
   }
 
-  const endpoint = req.params[0];
+  const rpcAddress = rpcCyclers[chainName]();
+  const url = `${rpcAddress}${req.path}`;
 
   try {
-    const response = await fetch(`${rpcUrl}/${endpoint}`, {
-      method: req.method,
+    const response = await fetch(url, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined,
-      agent,
+      body: JSON.stringify(req.body)
     });
 
-    if (response.ok) {
-      const data = await response.json();
-      res.status(response.status).json(data);
-    } else {
-      handleRpcFailure(rpcUrl);
-      res.status(response.status).send(`Error: ${response.statusText}`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
+
+    const data = await response.json();
+    res.json(data);
   } catch (error) {
-    handleRpcFailure(rpcUrl);
-    console.error(`Error proxying request to ${rpcUrl}/${endpoint}:`, error);
-    res.status(500).send('Internal server error');
+    console.error(`Error querying ${rpcAddress} for ${chainName}:`, error);
+    res.status(500).send('Error querying RPC endpoint');
   }
 });
 
