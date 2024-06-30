@@ -1,0 +1,6 @@
+{
+  "watch": ["balancer.mjs"],
+  "ignore": ["chains.json"],
+  "exec": "node balancer.mjs",
+  "ext": "mjs"
+}
