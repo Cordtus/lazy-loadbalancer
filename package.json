@@ -2,13 +2,22 @@
   "name": "load-balancer",
   "version": "1.0.0",
   "description": "Load balancer for Cosmos SDK RPC endpoints",
-  "main": "balancer.js",
+  "main": "balancer.mjs",
   "scripts": {
-    "start": "node loadBalancer.js"
+    "start": "node balancer.mjs",
+    "dev": "nodemon balancer.mjs",
+    "test": "mocha --require esm --recursive test/"
   },
+  "type": "module",
   "dependencies": {
     "express": "^4.19.2",
     "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.7",
+    "mocha": "^8.4.0",
+    "chai": "^4.3.4",
+    "esm": "^3.2.25"
   },
   "author": "Cordt Hanson",
   "license": "MIT",

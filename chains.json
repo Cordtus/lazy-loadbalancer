@@ -1,0 +1,1331 @@
+{
+  "chains": [
+    {
+      "name": "acrechain",
+      "chain-id": "acre_9052-1",
+      "account-prefix": "acre",
+      "rpc-addresses": [
+        "https://rpc-acre.synergynodes.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "agoric",
+      "chain-id": "agoric-3",
+      "account-prefix": "agoric",
+      "rpc-addresses": [
+        "https://agoric-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "aioz",
+      "chain-id": "aioz_168-1",
+      "account-prefix": "aioz",
+      "rpc-addresses": [
+        "https://rpc-dataseed.aioz.network:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "akash",
+      "chain-id": "akashnet-2",
+      "account-prefix": "akash",
+      "rpc-addresses": [
+        "https://rpc.akash.forbole.com:443",
+        "https://rpc-akash.ecostake.com:443",
+        "https://akash-rpc.lavenderfive.com:443",
+        "https://akash-rpc.polkachu.com",
+        "https://rpc-akash.cosmos-spaces.cloud",
+        "https://rpc-akash-ia.cosmosia.notional.ventures:443",
+        "http://akash.c29r3.xyz:80/rpc",
+        "https://akash-mainnet-rpc.autostake.com:443",
+        "https://akash-rpc.kleomedes.network",
+        "https://rpc-akash-01.stakeflow.io",
+        "https://akash-mainnet-rpc.cosmonautstakes.com:443",
+        "https://akash-rpc.w3coins.io",
+        "https://akash-rpc.publicnode.com:443",
+        "https://akash-rpc.validatornode.com",
+        "https://rpc-akash.whispernode.com:443",
+        "https://public.stakewolle.com/cosmos/akash/rpc",
+        "https://akash.declab.pro:26601"
+      ],
+      "timeout": "30s",
+      "last_updated": 1719751802688
+    },
+    {
+      "name": "andromeda",
+      "chain-id": "andromeda-1",
+      "account-prefix": "andr",
+      "rpc-addresses": [
+        "https://andromeda.rpc.nodex.one:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "archway",
+      "chain-id": "archway-1",
+      "account-prefix": "archway",
+      "rpc-addresses": [
+        "https://rpc-archway.theamsolutions.info:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "assetmantle",
+      "chain-id": "mantle-1",
+      "account-prefix": "mantle",
+      "rpc-addresses": [
+        "https://assetmantle-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "aura",
+      "chain-id": "xstaxy-1",
+      "account-prefix": "aura",
+      "rpc-addresses": [
+        "http://aura.rpc.m.stavr.tech:11047"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "axelar",
+      "chain-id": "axelar-dojo-1",
+      "account-prefix": "axelar",
+      "rpc-addresses": [
+        "https://axelar-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "bandchain",
+      "chain-id": "laozi-mainnet",
+      "account-prefix": "band",
+      "rpc-addresses": [
+        "https://rpc-band-01.stakeflow.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "beezee",
+      "chain-id": "beezee-1",
+      "account-prefix": "bze",
+      "rpc-addresses": [
+        "https://rpc.getbze.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "bitcanna",
+      "chain-id": "bitcanna-1",
+      "account-prefix": "bcna",
+      "rpc-addresses": [
+        "https://bitcanna-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "bitsong",
+      "chain-id": "bitsong-2b",
+      "account-prefix": "bitsong",
+      "rpc-addresses": [
+        "http://bitsong.statesync.nodersteam.com:11657"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "bluzelle",
+      "chain-id": "bluzelle-9",
+      "account-prefix": "bluzelle",
+      "rpc-addresses": [
+        "https://c.client.sentry.net.bluzelle.com:26657"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "bostrom",
+      "chain-id": "bostrom",
+      "account-prefix": "bostrom",
+      "rpc-addresses": [
+        "https://rpc.bostrom.cybernode.ai:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "canto",
+      "chain-id": "canto_7700-1",
+      "account-prefix": "canto",
+      "rpc-addresses": [
+        "https://canto-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "carbon",
+      "chain-id": "carbon-1",
+      "account-prefix": "swth",
+      "rpc-addresses": [
+        "https://carbon-rpc.lavenderfive.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "celestia",
+      "chain-id": "celestia",
+      "account-prefix": "celestia",
+      "rpc-addresses": [
+        "https://celestia-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "chain4energy",
+      "chain-id": "perun-1",
+      "account-prefix": "c4e",
+      "rpc-addresses": [
+        "https://rpc.c4e.stakeup.tech:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "cheqd",
+      "chain-id": "cheqd-mainnet-1",
+      "account-prefix": "cheqd",
+      "rpc-addresses": [
+        "https://rpc-cheqd.blockval.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "chihuahua",
+      "chain-id": "chihuahua-1",
+      "account-prefix": "chihuahua",
+      "rpc-addresses": [
+        "https://chihuahua-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "chimba",
+      "chain-id": "chimba",
+      "account-prefix": "chimba",
+      "rpc-addresses": [
+        "https://rpc.mainnet.chimba.ooo:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "cifer",
+      "chain-id": "cifer",
+      "account-prefix": "cife",
+      "rpc-addresses": [
+        "https://cif_node.cifer.ai:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "comdex",
+      "chain-id": "comdex-1",
+      "account-prefix": "comdex",
+      "rpc-addresses": [
+        "https://comdex-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "commercionetwork",
+      "chain-id": "commercio-3",
+      "account-prefix": "com",
+      "rpc-addresses": [
+        "https://rpc-mainnet.commercio.network:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "composable",
+      "chain-id": "centauri-1",
+      "account-prefix": "centauri",
+      "rpc-addresses": [
+        "https://composable.rpc.moonbridge.team:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "conscious",
+      "chain-id": "cvn_2032-1",
+      "account-prefix": "cvn",
+      "rpc-addresses": [
+        "https://rpc.cvn.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "coreum",
+      "chain-id": "coreum-mainnet-1",
+      "account-prefix": "core",
+      "rpc-addresses": [
+        "https://coreum-rpc.publicnode.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "cosmoshub",
+      "chain-id": "cosmoshub-4",
+      "account-prefix": "cosmos",
+      "rpc-addresses": [
+        "https://cosmos-rpc.polkachu.com:443",
+        "https://cosmos-rpc.quickapi.com:443",
+        "https://cosmos-rpc.onivalidator.com",
+        "https://rpc-cosmoshub.whispernode.com:443",
+        "https://cosmoshub-rpc.lavenderfive.com:443",
+        "https://rpc-cosmoshub.ecostake.com",
+        "https://go.getblock.io/17515cb3ec0e43b7817f182e5de6066a",
+        "https://rpc-cosmoshub.pupmos.network",
+        "https://rpc-cosmoshub.cosmos-spaces.cloud",
+        "https://cosmos-rpc.polkachu.com",
+        "https://cosmos-rpc.staketab.org:443",
+        "https://rpc-cosmoshub-ia.cosmosia.notional.ventures/",
+        "https://rpc-cosmoshub.architectnodes.com",
+        "https://rpc.cosmos.dragonstake.io",
+        "https://cosmoshub.rpc.stakin-nodes.com",
+        "https://rpc.cosmos.bh.rocks",
+        "https://cosmos-rpc.rockrpc.net",
+        "http://rpc-cosmoshub.freshstaking.com:26657",
+        "https://cosmos-rpc.easy2stake.com/",
+        "https://rpc.cosmos.nodestake.top",
+        "https://cosmos.rpc.silknodes.io",
+        "https://cosmos-rpc.publicnode.com:443",
+        "https://cosmoshub.rpc.kjnodes.com",
+        "https://rpc.cosmoshub.goldenratiostaking.net",
+        "https://rpc-cosmos-hub-01.stakeflow.io",
+        "https://cosmos-rpc.w3coins.io",
+        "https://rpc-cosmoshub.mms.team",
+        "https://cosmos-rpc.tienthuattoan.ventures",
+        "https://community.nuxian-node.ch:6797/gaia/trpc",
+        "https://cosmos-rpc.highstakes.ch",
+        "https://cosmoshub-rpc.cosmosrescue.dev",
+        "https://cosmos.interstellar-lounge.org",
+        "https://public.stakewolle.com/cosmos/cosmoshub/rpc",
+        "https://rpc-cosmos.kewrnode.com",
+        "https://rpc.cosmoshub-4.citizenweb3.com"
+      ],
+      "timeout": "30s",
+      "last_updated": 1719754763611
+    },
+    {
+      "name": "coss",
+      "chain-id": "coss-1",
+      "account-prefix": "coss",
+      "rpc-addresses": [
+        "https://coss-rpc.cias.network:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "crescent",
+      "chain-id": "crescent-1",
+      "account-prefix": "cre",
+      "rpc-addresses": [
+        "https://crescent-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "cronos",
+      "chain-id": "cronosmainnet_25-1",
+      "account-prefix": "crc",
+      "rpc-addresses": [
+        "https://cronos-rpc.publicnode.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "cryptoorgchain",
+      "chain-id": "crypto-org-chain-mainnet-1",
+      "account-prefix": "cro",
+      "rpc-addresses": [
+        "https://cryptocom-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "cudos",
+      "chain-id": "cudos-1",
+      "account-prefix": "cudos",
+      "rpc-addresses": [
+        "http://mainnet-full-node-01.hosts.cudos.org:26657"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "decentr",
+      "chain-id": "mainnet-3",
+      "account-prefix": "decentr",
+      "rpc-addresses": [
+        "https://poseidon.mainnet.decentr.xyz:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "desmos",
+      "chain-id": "desmos-mainnet",
+      "account-prefix": "desmos",
+      "rpc-addresses": [
+        "https://rpc.desmos.tcnetwork.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "dig",
+      "chain-id": "dig-1",
+      "account-prefix": "dig",
+      "rpc-addresses": [
+        "https://rpc-1-dig.notional.ventures:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "doravota",
+      "chain-id": "vota-ash",
+      "account-prefix": "dora",
+      "rpc-addresses": [
+        "https://m-dora.rpc.utsa.tech:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "dydx",
+      "chain-id": "dydx-mainnet-1",
+      "account-prefix": "dydx",
+      "rpc-addresses": [
+        "https://dydx-dao-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "dymension",
+      "chain-id": "dymension_1100-1",
+      "account-prefix": "dym",
+      "rpc-addresses": [
+        "https://dym-m-rpc.agoranodes.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "dyson",
+      "chain-id": "dyson-mainnet-01",
+      "account-prefix": "dys",
+      "rpc-addresses": [
+        "https://dys-tm.dysonprotocol.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "echelon",
+      "chain-id": "echelon_3000-3",
+      "account-prefix": "echelon",
+      "rpc-addresses": [
+        "https://ech01trpc.mindheartsoul.org:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "emoney",
+      "chain-id": "emoney-3",
+      "account-prefix": "emoney",
+      "rpc-addresses": [
+        "https://emoney.validator.network:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "empowerchain",
+      "chain-id": "empowerchain-1",
+      "account-prefix": "empower",
+      "rpc-addresses": [
+        "https://rpc-empowerchain.mzonder.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "evmos",
+      "chain-id": "evmos_9001-2",
+      "account-prefix": "evmos",
+      "rpc-addresses": [
+        "https://evmos-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "fetchhub",
+      "chain-id": "fetchhub-4",
+      "account-prefix": "fetch",
+      "rpc-addresses": [
+        "https://rpc-fetch.architectnodes.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "finschia",
+      "chain-id": "finschia-2",
+      "account-prefix": "link",
+      "rpc-addresses": [
+        "https://finschia-rpc.finschia.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "firmachain",
+      "chain-id": "colosseum-1",
+      "account-prefix": "firma",
+      "rpc-addresses": [
+        "https://firmachain-rpc.ramuchi.tech:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "furya",
+      "chain-id": "furya-1",
+      "account-prefix": "furya",
+      "rpc-addresses": [
+        "https://rpc.furya.xyz:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "fxcore",
+      "chain-id": "fxcore",
+      "account-prefix": "fx",
+      "rpc-addresses": [
+        "https://fx-json.functionx.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "gateway",
+      "chain-id": "wormchain",
+      "account-prefix": "wormhole",
+      "rpc-addresses": [
+        "https://wormchain-rpc.quickapi.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "genesisl1",
+      "chain-id": "genesis_29-2",
+      "account-prefix": "genesis",
+      "rpc-addresses": [
+        "https://26657.genesisl1.org:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "gitopia",
+      "chain-id": "gitopia",
+      "account-prefix": "gitopia",
+      "rpc-addresses": [
+        "https://gitopia-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "govgen",
+      "chain-id": "govgen-1",
+      "account-prefix": "govgen",
+      "rpc-addresses": [
+        "https://rpc-govgen.sg-1.online:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "gravitybridge",
+      "chain-id": "gravity-bridge-3",
+      "account-prefix": "gravity",
+      "rpc-addresses": [
+        "https://gravity-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "haqq",
+      "chain-id": "haqq_11235-1",
+      "account-prefix": "haqq",
+      "rpc-addresses": [
+        "https://haqq-rpc.publicnode.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "humans",
+      "chain-id": "humans_1089-1",
+      "account-prefix": "human",
+      "rpc-addresses": [
+        "https://humans.rpc.kjnodes.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "impacthub",
+      "chain-id": "ixo-5",
+      "account-prefix": "ixo",
+      "rpc-addresses": [
+        "https://ixo-rpc.ibs.team:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "injective",
+      "chain-id": "injective-1",
+      "account-prefix": "inj",
+      "rpc-addresses": [
+        "https://injective-rpc.publicnode.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "irisnet",
+      "chain-id": "irishub-1",
+      "account-prefix": "iaa",
+      "rpc-addresses": [
+        "https://rpc-irisnet-01.stakeflow.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "jackal",
+      "chain-id": "jackal-1",
+      "account-prefix": "jkl",
+      "rpc-addresses": [
+        "http://jkl.rpc.m.stavr.tech:11127"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "juno",
+      "chain-id": "juno-1",
+      "account-prefix": "juno",
+      "rpc-addresses": [
+        "https://rpc-juno.mib.tech:443",
+        "https://rpc-juno.whispernode.com:443",
+        "https://rpc-juno.itastakers.com",
+        "http://juno.rpc.m.stavr.tech:1067",
+        "https://rpc-juno.ecostake.com",
+        "https://juno-rpc.polkachu.com",
+        "https://juno-rpc.lavenderfive.com:443",
+        "https://rpc-juno.pupmos.network",
+        "https://rpc-juno.cosmos-spaces.cloud",
+        "https://rpc-juno-ia.cosmosia.notional.ventures/",
+        "https://rpc.juno.chaintools.tech/",
+        "https://juno-rpc.kleomedes.network",
+        "https://juno-rpc.icycro.org",
+        "https://rpc.juno.bh.rocks",
+        "https://juno-rpc.kingnodes.com",
+        "https://juno-rpc.reece.sh",
+        "https://juno-rpc.stakeandrelax.net",
+        "https://rpc-juno.architectnodes.com",
+        "https://rpc-juno-01.stakeflow.io",
+        "https://rpc-juno.validavia.me",
+        "https://juno-rpc.w3coins.io",
+        "https://juno-rpc.publicnode.com:443",
+        "https://juno-rpc.stake-town.com",
+        "https://rpc-juno.mainnet.validatrium.club:443",
+        "https://rpc.juno.validatus.com",
+        "https://rpc.juno.bronbro.io:443",
+        "https://juno-rpc.cogwheel.zone",
+        "https://juno.declab.pro:26610",
+        "https://juno.rpc.nodeshub.online:443"
+      ],
+      "timeout": "30s",
+      "last_updated": 1719754779172
+    },
+    {
+      "name": "kava",
+      "chain-id": "kava_2222-10",
+      "account-prefix": "kava",
+      "rpc-addresses": [
+        "https://kava-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "kichain",
+      "chain-id": "kichain-2",
+      "account-prefix": "ki",
+      "rpc-addresses": [
+        "https://kichain-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "konstellation",
+      "chain-id": "darchub",
+      "account-prefix": "darc",
+      "rpc-addresses": [
+        "https://konstellation-rpc.stakerhouse.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "kujira",
+      "chain-id": "kaiyo-1",
+      "account-prefix": "kujira",
+      "rpc-addresses": [
+        "https://kujira-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "kyve",
+      "chain-id": "kyve-1",
+      "account-prefix": "kyve",
+      "rpc-addresses": [
+        "https://kyve.rpc.liveraven.net:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "lambda",
+      "chain-id": "lambda_92000-1",
+      "account-prefix": "lamb",
+      "rpc-addresses": [
+        "https://rpc.lambda.nodestake.top:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "likecoin",
+      "chain-id": "likecoin-mainnet-2",
+      "account-prefix": "like",
+      "rpc-addresses": [
+        "http://51.159.223.25:28657"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "loyal",
+      "chain-id": "loyal-main-02",
+      "account-prefix": "loyal",
+      "rpc-addresses": [
+        "https://loyal-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "lumenx",
+      "chain-id": "LumenX",
+      "account-prefix": "lumen",
+      "rpc-addresses": [
+        "https://rpc-lumenx.cryptonet.pl:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "lumnetwork",
+      "chain-id": "lum-network-1",
+      "account-prefix": "lum",
+      "rpc-addresses": [
+        "https://lum-rpc.ibs.team:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "mars",
+      "chain-id": "mars-1",
+      "account-prefix": "mars",
+      "rpc-addresses": [
+        "https://mars-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "mayachain",
+      "chain-id": "mayachain-mainnet-v1",
+      "account-prefix": "maya",
+      "rpc-addresses": [
+        "https://tendermint.mayachain.info:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "medasdigital",
+      "chain-id": "medasdigital-1",
+      "account-prefix": "medas",
+      "rpc-addresses": [
+        "https://rpc.medas-digital.io:26657"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "meme",
+      "chain-id": "meme-1",
+      "account-prefix": "meme",
+      "rpc-addresses": [
+        "https://meme-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "migaloo",
+      "chain-id": "migaloo-1",
+      "account-prefix": "migaloo",
+      "rpc-addresses": [
+        "https://migaloo-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "mises",
+      "chain-id": "mainnet",
+      "account-prefix": "mises",
+      "rpc-addresses": [
+        "https://rpc.gw.mises.site:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "mun",
+      "chain-id": "mun-1",
+      "account-prefix": "mun",
+      "rpc-addresses": [
+        "https://rpc.mun.tcnetwork.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "neutron",
+      "chain-id": "neutron-1",
+      "account-prefix": "neutron",
+      "rpc-addresses": [
+        "https://rpc.novel.remedy.tm.p2p.org:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "nibiru",
+      "chain-id": "cataclysm-1",
+      "account-prefix": "nibi",
+      "rpc-addresses": [
+        "https://nibiru.rpc.kjnodes.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "noble",
+      "chain-id": "noble-1",
+      "account-prefix": "noble",
+      "rpc-addresses": [
+        "https://noble-rpc.lavenderfive.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "nois",
+      "chain-id": "nois-1",
+      "account-prefix": "nois",
+      "rpc-addresses": [
+        "https://nois-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "nolus",
+      "chain-id": "pirin-1",
+      "account-prefix": "nolus",
+      "rpc-addresses": [
+        "https://nolus.rpc.kjnodes.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "nomic",
+      "chain-id": "nomic-stakenet-3",
+      "account-prefix": "nomic",
+      "rpc-addresses": [
+        "https://nomic-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "nyx",
+      "chain-id": "nyx",
+      "account-prefix": "n",
+      "rpc-addresses": [
+        "https://rpc.nyx.nodes.guru:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "odin",
+      "chain-id": "odin-mainnet-freya",
+      "account-prefix": "odin",
+      "rpc-addresses": [
+        "https://rpc.odinprotocol.io:443",
+        "https://odin-rpc.lavenderfive.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "okexchain",
+      "chain-id": "exchain-66",
+      "account-prefix": "ex",
+      "rpc-addresses": [
+        "https://exchaintmrpc.okex.org:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "omniflixhub",
+      "chain-id": "omniflixhub-1",
+      "account-prefix": "omniflix",
+      "rpc-addresses": [
+        "https://omniflix-rpc.dakshavalidator.in:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "onomy",
+      "chain-id": "onomy-mainnet-1",
+      "account-prefix": "onomy",
+      "rpc-addresses": [
+        "https://rpc-mainnet.onomy.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "oraichain",
+      "chain-id": "Oraichain",
+      "account-prefix": "orai",
+      "rpc-addresses": [
+        "https://rpc-orai.blockval.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "osmosis",
+      "chain-id": "osmosis-1",
+      "account-prefix": "osmo",
+      "rpc-addresses": [
+        "https://osmosis-rpc.onivalidator.com:443",
+        "https://rpc.osmosis.zone/",
+        "https://rpc-osmosis.blockapsis.com",
+        "https://osmosis-rpc.onivalidator.com",
+        "https://osmosis-rpc.quickapi.com:443",
+        "https://rpc-osmosis.whispernode.com:443",
+        "https://osmosis-rpc.lavenderfive.com:443",
+        "https://rpc-osmosis.ecostake.com",
+        "https://rpc-osmosis.cosmos-spaces.cloud",
+        "https://osmosis-rpc.polkachu.com",
+        "https://rpc-osmosis-ia.cosmosia.notional.ventures",
+        "https://osmosis.rpc.stakin-nodes.com",
+        "https://osmosis-mainnet-rpc.autostake.com:443",
+        "https://osmosis.api.onfinality.io/public",
+        "https://rpc-osmosis-01.stakeflow.io",
+        "https://osmosis-rpc.w3coins.io",
+        "https://osmosis-rpc.publicnode.com:443",
+        "https://community.nuxian-node.ch:6797/osmosis/trpc",
+        "http://rpc-osmosis.freshstaking.com:31657",
+        "https://osmosis-rpc.stake-town.com",
+        "https://osmosis-mainnet.rpc.l0vd.com:443",
+        "https://osmosis-rpc.reece.sh",
+        "https://rpc.osmosis.validatus.com",
+        "https://rpc.osmosis.bronbro.io:443",
+        "https://osmosis.interstellar-lounge.org",
+        "https://public.stakewolle.com/cosmos/osmosis/rpc",
+        "https://rpc.cros-nest.com/osmosis",
+        "https://rpc-osmo.kewrnode.com",
+        "https://rpc.osmosis.goldenratiostaking.net",
+        "https://osmosis-rpc.noders.services"
+      ],
+      "timeout": "30s",
+      "last_updated": 1719754622858
+    },
+    {
+      "name": "panacea",
+      "chain-id": "panacea-3",
+      "account-prefix": "panacea",
+      "rpc-addresses": [
+        "https://panacea-rpc.staketab.org:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "passage",
+      "chain-id": "passage-2",
+      "account-prefix": "pasg",
+      "rpc-addresses": [
+        "https://passage-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "persistence",
+      "chain-id": "core-1",
+      "account-prefix": "persistence",
+      "rpc-addresses": [
+        "https://persistence-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "planq",
+      "chain-id": "planq_7070-2",
+      "account-prefix": "plq",
+      "rpc-addresses": [
+        "https://planq.rpc.skynodejs.net:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "point",
+      "chain-id": "point_10687-1",
+      "account-prefix": "point",
+      "rpc-addresses": [
+        "https://rpc.point.indonode.net:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "provenance",
+      "chain-id": "pio-mainnet-1",
+      "account-prefix": "pb",
+      "rpc-addresses": [
+        "https://rpc.provenance.blockval.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "pundix",
+      "chain-id": "PUNDIX",
+      "account-prefix": "px",
+      "rpc-addresses": [
+        "https://px-json.pundix.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "pylons",
+      "chain-id": "pylons-mainnet-1",
+      "account-prefix": "pylo",
+      "rpc-addresses": [
+        "https://rpc.nodejumper.io/pylons:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "quasar",
+      "chain-id": "quasar-1",
+      "account-prefix": "quasar",
+      "rpc-addresses": [
+        "https://quasar-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "quicksilver",
+      "chain-id": "quicksilver-2",
+      "account-prefix": "quick",
+      "rpc-addresses": [
+        "http://quick.rpc.m.stavr.tech:21027"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "qwoyn",
+      "chain-id": "qwoyn-1",
+      "account-prefix": "qwoyn",
+      "rpc-addresses": [
+        "https://rpc-qwoyn.theamsolutions.info:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "realio",
+      "chain-id": "realionetwork_3301-1",
+      "account-prefix": "realio",
+      "rpc-addresses": [
+        "http://realio.rpc.m.stavr.tech:21097"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "rebus",
+      "chain-id": "reb_1111-1",
+      "account-prefix": "rebus",
+      "rpc-addresses": [
+        "https://rebus-rpc.publicnode.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "regen",
+      "chain-id": "regen-1",
+      "account-prefix": "regen",
+      "rpc-addresses": [
+        "https://regen.stakesystems.io:2053"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "rizon",
+      "chain-id": "titan-1",
+      "account-prefix": "rizon",
+      "rpc-addresses": [
+        "https://rpc.rizon.chaintools.tech:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "scorum",
+      "chain-id": "scorum-1",
+      "account-prefix": "scorum",
+      "rpc-addresses": [
+        "https://scorum-blockchain-mainnet-rpc-2.scorum.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "secretnetwork",
+      "chain-id": "secret-4",
+      "account-prefix": "secret",
+      "rpc-addresses": [
+        "https://rpc-secret.01node.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "sentinel",
+      "chain-id": "sentinelhub-2",
+      "account-prefix": "sent",
+      "rpc-addresses": [
+        "https://rpc.sentinel.chaintools.tech:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "sge",
+      "chain-id": "sgenet-1",
+      "account-prefix": "sge",
+      "rpc-addresses": [
+        "https://sge-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "shareledger",
+      "chain-id": "ShareRing-VoyagerNet",
+      "account-prefix": "shareledger",
+      "rpc-addresses": [
+        "https://rpc.explorer.shareri.ng:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "shentu",
+      "chain-id": "shentu-2.2",
+      "account-prefix": "shentu",
+      "rpc-addresses": [
+        "https://shentu-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "sifchain",
+      "chain-id": "sifchain-1",
+      "account-prefix": "sif",
+      "rpc-addresses": [
+        "https://sifchain-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "six",
+      "chain-id": "sixnet",
+      "account-prefix": "6x",
+      "rpc-addresses": [
+        "https://sixnet-rpc.sixprotocol.net:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "sommelier",
+      "chain-id": "sommelier-3",
+      "account-prefix": "somm",
+      "rpc-addresses": [
+        "https://sommelier-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "source",
+      "chain-id": "source-1",
+      "account-prefix": "source",
+      "rpc-addresses": [
+        "https://source.rpc.moonbridge.team:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "stafihub",
+      "chain-id": "stafihub-1",
+      "account-prefix": "stafi",
+      "rpc-addresses": [
+        "https://public-rpc2.stafihub.io:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "stargaze",
+      "chain-id": "stargaze-1",
+      "account-prefix": "stars",
+      "rpc-addresses": [
+        "https://stargaze-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "starname",
+      "chain-id": "iov-mainnet-ibc",
+      "account-prefix": "star",
+      "rpc-addresses": [
+        "https://rpc.starname.app:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "stratos",
+      "chain-id": "stratos-1",
+      "account-prefix": "st",
+      "rpc-addresses": [
+        "https://rpc-stratos.whispernode.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "stride",
+      "chain-id": "stride-1",
+      "account-prefix": "stride",
+      "rpc-addresses": [
+        "https://stride-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "tenet",
+      "chain-id": "tenet_1559-1",
+      "account-prefix": "tenet",
+      "rpc-addresses": [
+        "https://tenet-rpc.publicnode.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "teritori",
+      "chain-id": "teritori-1",
+      "account-prefix": "tori",
+      "rpc-addresses": [
+        "https://teritori-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "terpnetwork",
+      "chain-id": "morocco-1",
+      "account-prefix": "terp",
+      "rpc-addresses": [
+        "https://terp.rpc.nodex.one:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "terra",
+      "chain-id": "columbus-5",
+      "account-prefix": "terra",
+      "rpc-addresses": [
+        "https://terra-classic-rpc.publicnode.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "terra2",
+      "chain-id": "phoenix-1",
+      "account-prefix": "terra",
+      "rpc-addresses": [
+        "https://terra-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "tgrade",
+      "chain-id": "tgrade-mainnet-1",
+      "account-prefix": "tgrade",
+      "rpc-addresses": [
+        "https://rpc.mainnet-1.tgrade.confio.run:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "umee",
+      "chain-id": "umee-1",
+      "account-prefix": "umee",
+      "rpc-addresses": [
+        "https://umee-rpc.polkachu.com:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "unification",
+      "chain-id": "FUND-MainNet-2",
+      "account-prefix": "und",
+      "rpc-addresses": [
+        "https://rpc.unification.chainmasters.ninja:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "ununifi",
+      "chain-id": "ununifi-beta-v1",
+      "account-prefix": "ununifi",
+      "rpc-addresses": [
+        "https://ununifi-rpc.genznodes.dev:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "uptick",
+      "chain-id": "uptick_117-1",
+      "account-prefix": "uptick",
+      "rpc-addresses": [
+        "http://uptick.rpc.m.stavr.tech:3157"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "vidulum",
+      "chain-id": "vidulum-1",
+      "account-prefix": "vdl",
+      "rpc-addresses": [
+        "https://vidulum.rpc.m.stavr.tech:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "xpla",
+      "chain-id": "dimension_37-1",
+      "account-prefix": "xpla",
+      "rpc-addresses": [
+        "https://dimension-rpc.xpla.dev:443"
+      ],
+      "timeout": "30s"
+    },
+    {
+      "name": "zetachain",
+      "chain-id": "zetachain_7000-1",
+      "account-prefix": "zeta",
+      "rpc-addresses": [
+        "https://zetachain-rpc.lavenderfive.com:443"
+      ],
+      "timeout": "30s"
+    }
+  ]
+}
