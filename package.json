@@ -1,0 +1,17 @@
+{
+  "name": "load-balancer",
+  "version": "1.0.0",
+  "description": "Load balancer for Cosmos SDK RPC endpoints",
+  "main": "balancer.js",
+  "scripts": {
+    "start": "node loadBalancer.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2"
+  },
+  "author": "Cordt Hanson",
+  "license": "MIT",
+  "repository": "https://github.com/Cordtus/lazy-loadbalancer",
+  "private": true
+}
