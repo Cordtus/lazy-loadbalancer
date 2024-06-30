@@ -22,6 +22,6 @@ Thumbs.db
 
 # Miscellaneous
 chains.json
-
+node_modules
 # Yarn lock file
 yarn.lock

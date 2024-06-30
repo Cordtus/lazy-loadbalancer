@@ -113,6 +113,17 @@ const getChainEntry = async (chainName) => {
   return chainEntry;
 };
 
+const cycleRpcAddresses = (rpcAddresses) => {
+  let index = 0;
+  return () => {
+    const rpcAddress = rpcAddresses[index];
+    index = (index + 1) % rpcAddresses.length;
+    return rpcAddress;
+  };
+};
+
+const rpcCyclers = {};
+
 app.get('/rpc-lb/:chainName', async (req, res) => {
   const chainName = req.params.chainName;
   const chainEntry = await getChainEntry(chainName);
@@ -122,7 +133,47 @@ app.get('/rpc-lb/:chainName', async (req, res) => {
     return;
   }
 
-  res.json(chainEntry);
+  if (!rpcCyclers[chainName]) {
+    rpcCyclers[chainName] = cycleRpcAddresses(chainEntry['rpc-addresses']);
+  }
+
+  const rpcAddress = rpcCyclers[chainName]();
+  res.json({ rpcAddress });
+});
+
+app.post('/api-query/:chainName', async (req, res) => {
+  const chainName = req.params.chainName;
+  const chainEntry = await getChainEntry(chainName);
+
+  if (!chainEntry) {
+    res.status(404).send('Chain not found');
+    return;
+  }
+
+  if (!rpcCyclers[chainName]) {
+    rpcCyclers[chainName] = cycleRpcAddresses(chainEntry['rpc-addresses']);
+  }
+
+  const rpcAddress = rpcCyclers[chainName]();
+  const url = `${rpcAddress}${req.path}`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body)
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error(`Error querying ${rpcAddress} for ${chainName}:`, error);
+    res.status(500).send('Error querying RPC endpoint');
+  }
 });
 
 app.listen(port, () => {
