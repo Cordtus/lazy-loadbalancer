@@ -64,8 +64,12 @@ If you already have a Caddyfile and want to add the load balancer configuration,
 - Create a new file called `lb.caddyfile`:
 
 ```shell
-  http://rpc-lb.*.example.com {
-  reverse_proxy http://localhost:3000
+http://lb.example.com {
+  reverse_proxy /rpc-lb/*/* http://localhost:3000
+  reverse_proxy /add-chain http://localhost:3000
+  reverse_proxy /update-chain-data http://localhost:3000
+  reverse_proxy /update-endpoint-data http://localhost:3000
+  reverse_proxy /speed-test/* http://localhost:3000
 }
 ```
 

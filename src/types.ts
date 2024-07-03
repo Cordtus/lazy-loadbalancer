@@ -4,10 +4,11 @@ export interface ChainEntry {
   bech32_prefix: string;
   'account-prefix': string;
   'rpc-addresses': string[];
+  timeout: string;
   apis?: {
     rpc: Array<{ address: string }>;
   };
-  timeout: string;
+  timestamp?: number;
 }
 
 export interface NetInfo {
@@ -25,5 +26,20 @@ export interface StatusInfo {
   sync_info: {
     earliest_block_height: string;
     earliest_block_time: string;
+  };
+}
+
+export interface Api {
+  address: string;
+}
+
+export interface ChainData {
+  chain_name: string;
+  chain_id: string;
+  bech32_prefix: string;
+  slip44: number;
+  apis: {
+    rpc: Api[];
+    rest: Api[];
   };
 }

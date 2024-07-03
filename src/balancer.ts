@@ -1,66 +1,89 @@
 import express from 'express';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { crawlNetwork } from './crawler.js';
 import { ChainEntry } from './types.js';
+import { fetchChainData, checkAndUpdateChains } from './fetchChains.js';
+import { ensureChainsFileExists, loadChainsData, saveChainsData } from './utils.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Get the directory name of the current module
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Ensure chains.json file exists
+ensureChainsFileExists();
 
-const CHAINS_FILE_PATH = path.resolve(__dirname, '../data/chains.json');
-
-let chainsData: Record<string, ChainEntry>;
-
-function loadChainsData() {
-  try {
-    const data = fs.readFileSync(CHAINS_FILE_PATH, 'utf-8');
-    chainsData = JSON.parse(data);
-    console.log('Chains data loaded.');
-  } catch (error) {
-    console.error('Error reading chains file:', error);
-    chainsData = {};
-  }
-}
-
-function saveChainsData() {
-  try {
-    fs.writeFileSync(CHAINS_FILE_PATH, JSON.stringify(chainsData, null, 2));
-    console.log('Chains data saved.');
-  } catch (error) {
-    console.error('Error writing chains file:', error);
-  }
-}
+let chainsData: Record<string, ChainEntry> = loadChainsData();
 
 async function updateChainData(chainName: string) {
-  const chainInfoUrl = `https://raw.githubusercontent.com/cosmos/chain-registry/master/${chainName}/chain.json`;
   try {
-    const response = await fetch(chainInfoUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch chain data for ${chainName}`);
-    }
-    const data = (await response.json()) as ChainEntry;
-    chainsData[chainName] = {
-      chain_name: data.chain_name,
-      'chain-id': data['chain-id'],
-      bech32_prefix: data.bech32_prefix,
-      'account-prefix': data['account-prefix'],
-      'rpc-addresses': data.apis?.rpc.map(api => api.address) || [],
-      timeout: '30s',
-      apis: data.apis // ensure we store the whole apis object
-    };
-    saveChainsData();
+    const chainData = await fetchChainData(chainName);
+    if (chainData) {
+      chainsData[chainName] = chainData;
+      saveChainsData(chainsData);
 
-    const initialRpcUrl = chainsData[chainName]['rpc-addresses'][0] + '/net_info';
-    console.log(`Starting network crawl from: ${initialRpcUrl}`);
-    await crawlNetwork(initialRpcUrl, 3);
+      const initialRpcUrl = chainsData[chainName]['rpc-addresses'][0] + '/net_info';
+      console.log(`Starting network crawl from: ${initialRpcUrl}`);
+      await crawlNetwork(initialRpcUrl, 3);
+    }
   } catch (error) {
     console.error('Error updating chain data:', error);
   }
+}
+
+async function updateEndpointData(chainName: string) {
+  try {
+    const chainEntry = chainsData[chainName];
+    if (!chainEntry) {
+      console.error(`Chain ${chainName} does not exist.`);
+      return;
+    }
+
+    const initialRpcUrl = chainEntry['rpc-addresses'][0] + '/net_info';
+    console.log(`Starting endpoint update from: ${initialRpcUrl}`);
+    await crawlNetwork(initialRpcUrl, 3);
+  } catch (error) {
+    console.error('Error updating endpoint data:', error);
+  }
+}
+
+async function speedTest(chainName: string) {
+  const chainEntry = chainsData[chainName];
+  if (!chainEntry) {
+    console.error(`Chain ${chainName} does not exist.`);
+    return;
+  }
+
+  const rpcAddresses = chainEntry['rpc-addresses'];
+  const results = [];
+  const exclusionList = new Set<string>();
+
+  for (const rpcAddress of rpcAddresses) {
+    if (exclusionList.has(rpcAddress)) {
+      continue;
+    }
+
+    try {
+      const startTime = Date.now();
+      const response = await fetch(`${rpcAddress}/status`);
+      const endTime = Date.now();
+      if (response.status === 429) {
+        exclusionList.add(rpcAddress);
+      } else if (!response.ok) {
+        exclusionList.add(rpcAddress);
+      } else {
+        results.push(endTime - startTime);
+      }
+    } catch (error) {
+      console.error(`Error testing ${rpcAddress}:`, error);
+      exclusionList.add(rpcAddress);
+    }
+  }
+
+  const totalRequests = results.length;
+  const totalTime = results.reduce((acc, curr) => acc + curr, 0);
+  const avgTimePerRequest = totalTime / totalRequests;
+
+  console.log(`Total requests: ${totalRequests}`);
+  console.log(`Average time per request: ${avgTimePerRequest} ms`);
+  console.log(`Requests per second: ${1000 / avgTimePerRequest}`);
 }
 
 app.use(express.json());
@@ -76,6 +99,32 @@ app.post('/add-chain', async (req, res) => {
   }
 
   res.send('Chain added and data updated.');
+});
+
+app.post('/update-chain-data', async (req, res) => {
+  const { chainName } = req.body;
+  if (!chainName) {
+    return res.status(400).send('Chain name is required.');
+  }
+
+  await updateChainData(chainName);
+  res.send(`Chain data for ${chainName} updated.`);
+});
+
+app.post('/update-endpoint-data', async (req, res) => {
+  const { chainName } = req.body;
+  if (!chainName) {
+    return res.status(400).send('Chain name is required.');
+  }
+
+  await updateEndpointData(chainName);
+  res.send(`Endpoint data for ${chainName} updated.`);
+});
+
+app.get('/speed-test/:chainName', async (req, res) => {
+  const { chainName } = req.params;
+  await speedTest(chainName);
+  res.send(`Speed test for ${chainName} completed. Check logs for details.`);
 });
 
 app.get('/rpc-lb/:chain/:endpoint', async (req, res) => {
@@ -103,8 +152,7 @@ app.get('/rpc-lb/:chain/:endpoint', async (req, res) => {
   }
 });
 
-loadChainsData();
-
 app.listen(PORT, () => {
   console.log(`Load balancer running at http://localhost:${PORT}`);
+  setInterval(checkAndUpdateChains, 24 * 60 * 60 * 1000); // Periodic update every 24 hours
 });

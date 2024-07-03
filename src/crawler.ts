@@ -1,10 +1,8 @@
 import fetch, { RequestInit } from 'node-fetch';
 import { Octokit } from "@octokit/core";
 import dotenv from "dotenv";
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { ChainEntry } from './types.js';
+import { ensureChainsFileExists, loadChainsData, saveChainsData } from './utils.js';
 
 dotenv.config();
 
@@ -12,13 +10,11 @@ const octokit = new Octokit({
   auth: process.env.GITHUB_PAT,
 });
 
-// Workaround for __dirname in ES module
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Ensure chains.json file exists
+ensureChainsFileExists();
 
 const REPO_OWNER = "cosmos";
 const REPO_NAME = "chain-registry";
-const CHAINS_FILE_PATH = path.resolve(__dirname, '../data/chains.json');
 
 interface NetInfo {
   peers: Array<{
@@ -137,9 +133,7 @@ async function crawlNetwork(url: string, maxDepth: number, currentDepth = 0): Pr
 }
 
 async function updateChains() {
-  const chainsData: { [key: string]: ChainEntry } = JSON.parse(
-    fs.readFileSync(CHAINS_FILE_PATH, "utf-8")
-  );
+  const chainsData: { [key: string]: ChainEntry } = loadChainsData();
 
   for (const chainName of Object.keys(chainsData)) {
     console.log(`Fetching RPC addresses for ${chainName}...`);
@@ -148,7 +142,7 @@ async function updateChains() {
     console.log(`${chainName}: ${rpcAddresses.length} RPC addresses found.`);
   }
 
-  fs.writeFileSync(CHAINS_FILE_PATH, JSON.stringify(chainsData, null, 2));
+  saveChainsData(chainsData);
   console.log("Chains data updated with RPC addresses.");
 }
 
@@ -157,9 +151,7 @@ async function updateChains() {
   await updateChains();
 
   // Load chainsData again to ensure updated data is used
-  const chainsData: { [key: string]: ChainEntry } = JSON.parse(
-    fs.readFileSync(CHAINS_FILE_PATH, "utf-8")
-  );
+  const chainsData: { [key: string]: ChainEntry } = loadChainsData();
 
   // Assuming we start crawling from some initial known RPC URL for each chain
   const initialRPCs = Object.values(chainsData).flatMap(chain => chain['rpc-addresses']);
