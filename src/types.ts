@@ -24,10 +24,11 @@ export interface NetInfo {
 
 export interface StatusInfo {
   sync_info: {
-    earliest_block_height: string;
-    earliest_block_time: string;
+    latest_block_height: string;
+    latest_block_time: string;
   };
 }
+
 
 export interface Api {
   address: string;

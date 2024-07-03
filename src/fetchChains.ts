@@ -1,6 +1,5 @@
 import { Octokit } from "@octokit/core";
 import dotenv from "dotenv";
-import path from "path";
 import fetch from "node-fetch";
 import { ChainEntry, ChainData } from "./types";
 import { ensureChainsFileExists, loadChainsData, saveChainsData } from './utils.js';
