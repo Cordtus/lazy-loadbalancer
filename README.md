@@ -1,6 +1,8 @@
 # Load Balancer for Cosmos SDK RPC Endpoints
 
-Set up a load balancer for many IBC networks' API endpoints using Node.js and Caddy. It dynamically fetches and caches RPC endpoint data for different chains and can be easily configured to do the same for REST or other API endpoints.
+This project was inspired largely by Jacob Gadikian of [Notional](https://notional.ventures/)'s [RPC crawler](https://github.com/notional-labs) logic, and the [cosmos.directory](https://cosmos.directory) Load balanced proxy endpoint created by [Eco-stake](https://ecologi.com/ecostake), and by the desperate need of actually somewhat useful infrastructure on almost every existing IBC network. I give huge respect to the ones that offer reasonable access (you know who you are).
+
+This ie intended for personal use only, and is intended to reduce the overall load on the most commonly used infrastructure. It is a personal load balancer for many IBC networks' API endpoints using Node.js and Caddy. It dynamically fetches and caches RPC endpoint data for different chains and can be easily configured to do the same for REST or other API endpoints.
 
 ## Prerequisites
 
