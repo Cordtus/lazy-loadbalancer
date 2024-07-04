@@ -2,13 +2,17 @@ import express from 'express';
 import { crawlNetwork } from './crawler.js';
 import { ChainEntry } from './types.js';
 import { fetchChainData, checkAndUpdateChains } from './fetchChains.js';
-import { ensureChainsFileExists, loadChainsData, saveChainsData } from './utils.js';
+import { ensureFilesExist, loadChainsData, saveChainsData, getDirName, logToFile } from './utils.js';
 import fetch from 'node-fetch';
+import path from 'path';
+import fs from 'fs';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-ensureChainsFileExists();
+ensureFilesExist();
+
+const logModuleName = 'balancer';
 
 let chainsData: Record<string, ChainEntry> = loadChainsData();
 
@@ -21,10 +25,12 @@ async function updateChainData(chainName: string) {
 
       const initialRpcUrl = chainsData[chainName]['rpc-addresses'][0] + '/net_info';
       console.log(`Starting network crawl from: ${initialRpcUrl}`);
+      logToFile(logModuleName, `Starting network crawl from: ${initialRpcUrl}`);
       await crawlNetwork(chainName, initialRpcUrl, 3, 0);
     }
   } catch (error) {
     console.error('Error updating chain data:', error);
+    logToFile(logModuleName, `Error updating chain data: ${error}`);
   }
 }
 
@@ -33,14 +39,17 @@ async function updateEndpointData(chainName: string) {
     const chainEntry = chainsData[chainName];
     if (!chainEntry) {
       console.error(`Chain ${chainName} does not exist.`);
+      logToFile(logModuleName, `Chain ${chainName} does not exist.`);
       return;
     }
 
     const initialRpcUrl = chainEntry['rpc-addresses'][0] + '/net_info';
     console.log(`Starting endpoint update from: ${initialRpcUrl}`);
+    logToFile(logModuleName, `Starting endpoint update from: ${initialRpcUrl}`);
     await crawlNetwork(chainName, initialRpcUrl, 3, 0);
   } catch (error) {
     console.error('Error updating endpoint data:', error);
+    logToFile(logModuleName, `Error updating endpoint data: ${error}`);
   }
 }
 
@@ -48,6 +57,7 @@ async function speedTest(chainName: string) {
   const chainEntry = chainsData[chainName];
   if (!chainEntry) {
     console.error(`Chain ${chainName} does not exist.`);
+    logToFile(logModuleName, `Chain ${chainName} does not exist.`);
     return;
   }
 
@@ -73,6 +83,7 @@ async function speedTest(chainName: string) {
       }
     } catch (error) {
       console.error(`Error testing ${rpcAddress}:`, error);
+      logToFile(logModuleName, `Error testing ${rpcAddress}: ${error}`);
       exclusionList.add(rpcAddress);
     }
   }
@@ -84,6 +95,9 @@ async function speedTest(chainName: string) {
   console.log(`Total requests: ${totalRequests}`);
   console.log(`Average time per request: ${avgTimePerRequest} ms`);
   console.log(`Requests per second: ${1000 / avgTimePerRequest}`);
+  logToFile(logModuleName, `Total requests: ${totalRequests}`);
+  logToFile(logModuleName, `Average time per request: ${avgTimePerRequest} ms`);
+  logToFile(logModuleName, `Requests per second: ${1000 / avgTimePerRequest}`);
 }
 
 async function proxyRequest(chain: string, endpoint: string, res: express.Response) {
@@ -93,26 +107,27 @@ async function proxyRequest(chain: string, endpoint: string, res: express.Respon
   }
 
   let successfulResponse = false;
+  let currentIndex = 0;
 
-  for (let i = 0; i < rpcAddresses.length; i++) {
-    const rpcAddress = rpcAddresses[i];
+  while (!successfulResponse && currentIndex < rpcAddresses.length) {
+    const rpcAddress = rpcAddresses[currentIndex];
     console.log(`Proxying request to: ${rpcAddress}/${endpoint}`);
+    logToFile(logModuleName, `Proxying request to: ${rpcAddress}/${endpoint}`);
     try {
       const response = await fetch(`${rpcAddress}/${endpoint}`);
       const data = await response.json();
       res.json(data);
       successfulResponse = true;
-      break;
     } catch (error) {
       console.error(`Error proxying request to ${rpcAddress}/${endpoint}:`, error);
-      if (i === rpcAddresses.length - 1) {
-        return res.status(500).send('Error proxying request.');
-      }
+      logToFile(logModuleName, `Error proxying request to ${rpcAddress}/${endpoint}: ${error}`);
+      currentIndex++;
     }
   }
 
   if (!successfulResponse) {
     res.status(500).send('Error proxying request.');
+    logToFile(logModuleName, 'Error proxying request.');
   }
 }
 
@@ -162,6 +177,7 @@ app.get('/rpc-lb/:chain/:endpoint', async (req, res) => {
 
   if (!chainsData[chain]) {
     console.log(`Chain data for ${chain} not found, updating...`);
+    logToFile(logModuleName, `Chain data for ${chain} not found, updating...`);
     await updateChainData(chain);
   }
 
@@ -170,5 +186,6 @@ app.get('/rpc-lb/:chain/:endpoint', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Load balancer running at http://localhost:${PORT}`);
+  logToFile(logModuleName, `Load balancer running at http://localhost:${PORT}`);
   setInterval(checkAndUpdateChains, 24 * 60 * 60 * 1000); // Periodic update every 24 hours
 });
