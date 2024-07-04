@@ -211,7 +211,7 @@ curl -X POST http://localhost:3000/akash/crawl-chain
 ```
 
 ```bash
-curl http://lb.example.com/speed-test/akash
+curl http://localhost:3000/speed-test/akash
 ```
 
 ### Load Balancing RPC Requests
@@ -219,7 +219,7 @@ curl http://lb.example.com/speed-test/akash
 To send a load-balanced RPC request, send a GET request to the `/rpc-lb/<chainName>/<endpoint>` endpoint:
 
 ```bash
-curl http://lb.example.com/rpc-lb/akash/status
+curl http://localhost:3000/akash/status
 ```
 
 ## Logging
