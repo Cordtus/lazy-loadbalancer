@@ -12,6 +12,7 @@ export function getDirName(metaUrl: string): string {
 const CHAINS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/chains.json');
 const REJECTED_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/rejected_ips.json');
 const GOOD_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/good_ips.json');
+const LOGS_DIR_PATH = path.resolve(getDirName(import.meta.url), '../logs');
 
 export function ensureFilesExist() {
   if (!fs.existsSync(CHAINS_FILE_PATH)) {
@@ -22,6 +23,9 @@ export function ensureFilesExist() {
   }
   if (!fs.existsSync(GOOD_IPS_FILE_PATH)) {
     fs.writeFileSync(GOOD_IPS_FILE_PATH, JSON.stringify({}));
+  }
+  if (!fs.existsSync(LOGS_DIR_PATH)) {
+    fs.mkdirSync(LOGS_DIR_PATH);
   }
 }
 
@@ -86,6 +90,7 @@ export function saveGoodIPs(goodIPs: Record<string, number>) {
 }
 
 export function logToFile(moduleName: string, message: string) {
-  const logFilePath = path.resolve(getDirName(import.meta.url), `../data/${moduleName}.log`);
+  ensureFilesExist();
+  const logFilePath = path.resolve(LOGS_DIR_PATH, `${moduleName}.log`);
   fs.appendFileSync(logFilePath, `${new Date().toISOString()} - ${message}\n`);
 }

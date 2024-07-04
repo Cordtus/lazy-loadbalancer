@@ -31,5 +31,5 @@
   "author": "Cordt Hanson",
   "license": "MIT",
   "repository": "https://github.com/Cordtus/lazy-loadbalancer",
-  "private": true
+  "private": false
 }

@@ -2,7 +2,7 @@
 
 This project was inspired largely by Jacob Gadikian of [Notional](https://notional.ventures/)'s [RPC crawler](https://github.com/notional-labs) logic, and the [cosmos.directory](https://cosmos.directory) Load balanced proxy endpoint created by [Eco-stake](https://ecologi.com/ecostake), and by the desperate need of actually somewhat useful infrastructure on almost every existing IBC network. I give huge respect to the ones that offer reasonable access (you know who you are).
 
-This ie intended for personal use only, and is intended to reduce the overall load on the most commonly used infrastructure. It is a personal load balancer for many IBC networks' API endpoints using Node.js and Caddy. It dynamically fetches and caches RPC endpoint data for different chains and can be easily configured to do the same for REST or other API endpoints.
+This is intended for personal use only, and is intended to reduce the overall load on the most commonly used infrastructure. It is a personal load balancer for many IBC networks' API endpoints using Node.js and Caddy. It dynamically fetches and caches RPC endpoint data for different chains and can be easily configured to do the same for REST or other API endpoints.
 
 ## Prerequisites
 
@@ -30,13 +30,19 @@ yarn install
 yarn build
 ```
 
-4. Start the Node.js server:
+4. Create a `.env` file with your GitHub personal access token (GITHUB_PAT):
+
+```bash
+echo "GITHUB_PAT=your_github_personal_access_token" > .env
+```
+
+5. Start the Node.js server:
 
 ```bash
 yarn start
 ```
 
-5. Configure Caddy
+6. Configure Caddy
 
 ### Creating a `Caddyfile`
 
@@ -106,13 +112,13 @@ import /etc/caddy/lb.caddyfile
 
 *Replace /path/to with the actual path to the lb.caddyfile.*
 
-6. Reload Caddy to apply the new configuration:
+7. Reload Caddy to apply the new configuration:
 
 ```bash
 caddy reload --config /path/to/your/Caddyfile
 ```
 
-7. Run Caddy:
+8. Run Caddy:
 
 ```bash
 caddy run --config /path/to/Caddyfile
@@ -124,9 +130,7 @@ You can now access the load balancer by making a request to your Caddy server. H
 
 ### Adding a New Chain
 
-To add
-
- a new chain, send a POST request to the `/add-chain` endpoint:
+To add a new chain, send a POST request to the `/add-chain` endpoint:
 
 ```bash
 curl -X POST http://lb.example.com/add-chain -H "Content-Type: application/json" -d '{"chainName": "akash"}'
@@ -163,3 +167,29 @@ To send a load-balanced RPC request, send a GET request to the `/rpc-lb/<chainNa
 ```bash
 curl http://lb.example.com/rpc-lb/akash/status
 ```
+
+## Logging
+
+Logs are stored in the `./logs` directory. Each module (balancer, crawler, fetchChains) has its own log file. You can check these logs for detailed information about the application's operations.
+
+## Directory Structure
+
+- `src/`: Contains the source code for the application.
+  - `balancer.ts`: The main server code for the load balancer.
+  - `crawler.ts`: Contains the logic for crawling and validating RPC endpoints.
+  - `fetchChains.ts`: Contains the logic for fetching chain data from GitHub.
+  - `utils.ts`: Contains utility functions for file operations and logging.
+  - `types.ts`: Contains TypeScript type definitions.
+- `data/`: Contains the JSON files for chain data and rejected IPs.
+  - `chains.json`: Stores the chain data.
+  - `rejected_ips.json`: Stores the list of rejected IPs.
+  - `good_ips.json`: Stores the list of good IPs and their last crawled time.
+- `logs/`: Contains the log files for different modules.
+
+## Contributing
+
+If you want to contribute to this project, feel free to submit issues and pull requests. Contributions are welcome!
+
+## License
+
+This project is licensed under the MIT License.

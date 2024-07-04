@@ -3,8 +3,6 @@ import dotenv from "dotenv";
 import fetch from "node-fetch";
 import { ChainEntry, ChainData } from "./types";
 import { ensureFilesExist, loadChainsData, saveChainsData, logToFile, getDirName } from './utils.js';
-import path from 'path';
-import fs from 'fs';
 
 dotenv.config();
 

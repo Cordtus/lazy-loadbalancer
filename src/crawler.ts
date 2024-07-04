@@ -2,7 +2,7 @@ import fetch, { RequestInit } from 'node-fetch';
 import { Octokit } from "@octokit/core";
 import dotenv from "dotenv";
 import { ChainEntry, NetInfo, StatusInfo } from './types.js';
-import { ensureFilesExist, loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, loadGoodIPs, saveGoodIPs, logToFile, getDirName } from './utils.js';
+import { ensureFilesExist, loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, logToFile, getDirName, loadGoodIPs, saveGoodIPs } from './utils.js';
 import path from 'path';
 import fs from 'fs';
 
@@ -24,7 +24,6 @@ const timeout = 3000; // Timeout for requests in milliseconds
 const logModuleName = 'crawler';
 
 const invalidIPs = new Set(['127.0.0.1', '0.0.0.0']);
-
 async function fetchNetInfo(url: string): Promise<NetInfo | null> {
   logToFile(logModuleName, `Fetching ${url}`);
   try {
@@ -83,14 +82,12 @@ async function crawlNetwork(chainName: string, url: string, maxDepth: number, cu
   }
 
   const hostname = new URL(url).hostname;
-  const currentTime = Date.now();
-
-  if (rejectedIPs.has(hostname) || invalidIPs.has(hostname)) {
-    logToFile(logModuleName, `Skipping rejected or invalid IP: ${url}`);
+  if (rejectedIPs.has(hostname)) {
+    logToFile(logModuleName, `Skipping rejected IP: ${url}`);
     return;
   }
 
-  if (goodIPs[hostname] && currentTime - goodIPs[hostname] < 24 * 60 * 60 * 1000) {
+  if (goodIPs[hostname] && Date.now() - goodIPs[hostname] < 24 * 60 * 60 * 1000) {
     logToFile(logModuleName, `Skipping recently crawled good IP: ${url}`);
     return;
   }
@@ -138,11 +135,11 @@ async function crawlNetwork(chainName: string, url: string, maxDepth: number, cu
       if (!chainsData[chainName]['rpc-addresses'].includes(rpcAddress)) {
         chainsData[chainName]['rpc-addresses'].push(rpcAddress);
         saveChainsData(chainsData);
+        goodIPs[hostname] = Date.now();
+        saveGoodIPs(goodIPs);
         console.log(`Added new RPC endpoint: ${rpcAddress}`);
         logToFile(logModuleName, `Added new RPC endpoint: ${rpcAddress}`);
       }
-      goodIPs[hostname] = currentTime;
-      saveGoodIPs(goodIPs);
     } else {
       logToFile(logModuleName, `Rejected invalid RPC endpoint: ${rpcAddress}`);
       rejectedIPs.add(new URL(rpcAddress).hostname);

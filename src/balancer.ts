@@ -4,8 +4,6 @@ import { ChainEntry } from './types.js';
 import { fetchChainData, checkAndUpdateChains } from './fetchChains.js';
 import { ensureFilesExist, loadChainsData, saveChainsData, getDirName, logToFile } from './utils.js';
 import fetch from 'node-fetch';
-import path from 'path';
-import fs from 'fs';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
