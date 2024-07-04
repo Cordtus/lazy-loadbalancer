@@ -1,8 +1,8 @@
 import express from 'express';
-import { crawlNetwork } from './crawler.js';
+import { crawlNetwork, updateChains } from './crawler.js';
 import { ChainEntry } from './types.js';
-import { fetchChainData, checkAndUpdateChains } from './fetchChains.js';
-import { ensureFilesExist, loadChainsData, saveChainsData, getDirName, logToFile } from './utils.js';
+import { fetchChainData, checkAndUpdateChains, fetchChains } from './fetchChains.js';
+import { ensureFilesExist, loadChainsData, saveChainsData, logToFile } from './utils.js';
 import fetch from 'node-fetch';
 
 const app = express();
@@ -180,6 +180,47 @@ app.get('/rpc-lb/:chain/:endpoint', async (req, res) => {
   }
 
   await proxyRequest(chain, endpoint, res);
+});
+
+app.post('/update-all-chains', async (req, res) => {
+  await fetchChains();
+  res.send('All chains data updated.');
+});
+
+app.post('/:chain/update-chain', async (req, res) => {
+  const { chain } = req.params;
+  if (!chain) {
+    return res.status(400).send('Chain name is required.');
+  }
+
+  await updateChainData(chain);
+  res.send(`Chain data for ${chain} updated.`);
+});
+
+app.post('/crawl-all-chains', async (req, res) => {
+  const chainsData: { [key: string]: ChainEntry } = loadChainsData();
+  const maxDepth = 3;
+
+  for (const chainName of Object.keys(chainsData)) {
+    const initialRPCs = chainsData[chainName]['rpc-addresses'];
+    for (const rpc of initialRPCs) {
+      await crawlNetwork(chainName, `${rpc}/net_info`, maxDepth);
+    }
+  }
+
+  res.send('Crawled all chains.');
+});
+
+app.post('/:chain/crawl-chain', async (req, res) => {
+  const { chain } = req.params;
+  const chainEntry = chainsData[chain];
+  if (!chainEntry) {
+    return res.status(400).send(`Chain ${chain} not found.`);
+  }
+
+  const initialRpcUrl = chainEntry['rpc-addresses'][0] + '/net_info';
+  await crawlNetwork(chain, initialRpcUrl, 3, 0);
+  res.send(`Crawled chain ${chain}.`);
 });
 
 app.listen(PORT, () => {

@@ -23,7 +23,6 @@ const goodIPs = loadGoodIPs();
 const timeout = 3000; // Timeout for requests in milliseconds
 const logModuleName = 'crawler';
 
-const invalidIPs = new Set(['127.0.0.1', '0.0.0.0']);
 async function fetchNetInfo(url: string): Promise<NetInfo | null> {
   logToFile(logModuleName, `Fetching ${url}`);
   try {
@@ -36,7 +35,7 @@ async function fetchNetInfo(url: string): Promise<NetInfo | null> {
     return data.result;
   } catch (error) {
     console.error(`Error fetching ${url}:`, (error as Error).message);
-    logToFile(logModuleName, `Error fetching ${url}: ${error}`);
+    logToFile(logModuleName, `Error fetching ${url}: ${(error as Error).message}`);
     return null;
   }
 }
@@ -53,7 +52,7 @@ async function fetchStatus(url: string): Promise<StatusInfo | null> {
     return data.result;
   } catch (error) {
     console.error(`Error fetching ${url}:`, (error as Error).message);
-    logToFile(logModuleName, `Error fetching ${url}: ${error}`);
+    logToFile(logModuleName, `Error fetching ${url}: ${(error as Error).message}`);
     return null;
   }
 }
@@ -81,7 +80,15 @@ async function crawlNetwork(chainName: string, url: string, maxDepth: number, cu
     return;
   }
 
-  const hostname = new URL(url).hostname;
+  let hostname;
+  try {
+    hostname = new URL(url).hostname;
+  } catch (error) {
+    console.error(`Invalid URL: ${url}`, error);
+    logToFile(logModuleName, `Invalid URL: ${url} - ${(error as Error).message}`);
+    return;
+  }
+
   if (rejectedIPs.has(hostname)) {
     logToFile(logModuleName, `Skipping rejected IP: ${url}`);
     return;
@@ -115,10 +122,17 @@ async function crawlNetwork(chainName: string, url: string, maxDepth: number, cu
   const chainsData = loadChainsData();
   const crawlPromises = peers.map(async (peer) => {
     const remoteIp = peer.remote_ip;
-    let rpcAddress = peer.node_info.other.rpc_address.replace('tcp://', 'http://').replace('0.0.0.0', remoteIp).replace('127.0.0.1', remoteIp);
+    let rpcAddress = peer.node_info.other.rpc_address
+      .replace('tcp://', 'http://')
+      .replace('0.0.0.0', remoteIp)
+      .replace('127.0.0.1', remoteIp);
 
-    if (!rpcAddress || rpcAddress === 'http://') {
-      logToFile(logModuleName, `Invalid RPC address: ${rpcAddress}`);
+    // Ensure the URL is valid
+    try {
+      new URL(rpcAddress);
+    } catch (error) {
+      console.error(`Invalid RPC address: ${rpcAddress}`, error);
+      logToFile(logModuleName, `Invalid RPC address: ${rpcAddress} - ${(error as Error).message}`);
       return;
     }
 
@@ -216,4 +230,4 @@ async function updateChains() {
   }
 })();
 
-export { crawlNetwork, fetchNetInfo };
+export { crawlNetwork, fetchNetInfo, updateChains };

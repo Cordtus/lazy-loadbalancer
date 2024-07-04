@@ -24,16 +24,15 @@ export interface NetInfo {
 
 export interface StatusInfo {
   node_info: {
-      other: {
-        tx_index: string
-      }
-  }
+    other: {
+      tx_index: string;
+    };
+  };
   sync_info: {
     latest_block_height: string;
     latest_block_time: string;
   };
 }
-
 
 export interface Api {
   address: string;

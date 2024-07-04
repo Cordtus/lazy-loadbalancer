@@ -126,35 +126,89 @@ caddy run --config /path/to/Caddyfile
 
 ## Usage
 
-You can now access the load balancer by making a request to your Caddy server. Here are some example commands to run the various functions:
+### You can now access the load balancer by making a request to your Caddy server. Here are some example commands to run the various functions:
 
-### Adding a New Chain
+`/update-all-chains`
+This endpoint updates the data for all chains.
 
-To add a new chain, send a POST request to the `/add-chain` endpoint:
-
-```bash
-curl -X POST http://lb.example.com/add-chain -H "Content-Type: application/json" -d '{"chainName": "akash"}'
-```
-
-### Updating Chain Data
-
-To update the data for a specific chain, send a POST request to the `/update-chain-data` endpoint:
+**Request**:
 
 ```bash
-curl -X POST http://lb.example.com/update-chain-data -H "Content-Type: application/json" -d '{"chainName": "akash"}'
+curl -X POST http://localhost:3000/update-all-chains
 ```
 
-### Updating Endpoint Data
+**Response**:
 
-To update the endpoint data for a specific chain, send a POST request to the `/update-endpoint-data` endpoint:
+ - A message indicating that all chain data has been updated.
+
+`/<chain>/update-chain`
+This endpoint updates the data for a specific chain.
+
+**Request**:
 
 ```bash
-curl -X POST http://lb.example.com/update-endpoint-data -H "Content-Type: application/json" -d '{"chainName": "akash"}'
+curl -X POST http://localhost:3000/<chain>/update-chain
+Replace <chain> with the name of the chain you want to update.
 ```
 
-### Running a Speed Test
+**Response**:
 
-To run a speed test, send a GET request to the `/speed-test/<chainName>` endpoint:
+ - A message indicating that the specified chain data has been updated.
+
+
+`/crawl-all-chains`
+This endpoint starts the network crawl for all chains.
+
+**Request**:
+
+```bash
+curl -X POST http://localhost:3000/crawl-all-chains
+```
+
+**Response**:
+
+ - A message indicating that the network crawl has started for all chains.
+
+
+`/<chain>/crawl-chain`
+This endpoint starts the network crawl for a specific chain.
+
+**Request**:
+
+```bash
+curl -X POST http://localhost:3000/<chain>/crawl-chain
+```
+
+
+Replace `<chain>` with the name of the chain you want to crawl.
+
+**Response**:
+
+A message indicating that the network crawl has started for the specified chain.
+Example Usage
+Update All Chains:
+
+```bash
+curl -X POST http://localhost:3000/update-all-chains
+```
+
+Update a Specific Chain:
+
+```bash
+curl -X POST http://localhost:3000/akash/update-chain
+```
+
+Crawl All Chains:
+
+```bash
+curl -X POST http://localhost:3000/crawl-all-chains
+```
+
+Crawl a Specific Chain:
+
+```bash
+curl -X POST http://localhost:3000/akash/crawl-chain
+```
 
 ```bash
 curl http://lb.example.com/speed-test/akash

@@ -3,23 +3,20 @@ node_modules/
 dist/
 
 # Log files
+logs/
 *.log
+
 # Environment variables
 .env
-
-# OS-specific files
-.DS_Store
-Thumbs.db
 
 # IDE-specific files
 .vscode/
 .idea/
 
-# Caddy log files
-/var/log/*.log
-
 # Miscellaneous
 chains.json
-node_modules
-# Yarn lock file
+good_ips.json
+rejected_ips.json
+
+# lock file
 yarn.lock

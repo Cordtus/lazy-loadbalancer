@@ -13,6 +13,7 @@ const octokit = new Octokit({
 const REPO_OWNER = "cosmos";
 const REPO_NAME = "chain-registry";
 const UPDATE_INTERVAL = 7 * 24 * 60 * 60 * 1000; // 7 days
+const CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
 const logModuleName = 'fetchChains';
 
@@ -56,7 +57,8 @@ async function fetchChains() {
       repo: REPO_NAME,
     });
 
-    const chainsData: { [key: string]: ChainEntry } = {};
+    const chainsData: { [key: string]: ChainEntry } = loadChainsData();
+    const now = Date.now();
 
     if (Array.isArray(response.data)) {
       for (const item of response.data) {
@@ -66,10 +68,13 @@ async function fetchChains() {
           !item.name.startsWith("_") &&
           item.name !== "testnets"
         ) {
-          const chainData = await fetchChainData(item.name);
-          if (chainData) {
-            chainsData[item.name] = chainData;
-            logToFile(logModuleName, `Fetched and saved data for chain: ${item.name}`);
+          const chainEntry = chainsData[item.name];
+          if (!chainEntry || !chainEntry.timestamp || now - chainEntry.timestamp > CHECK_INTERVAL) {
+            const chainData = await fetchChainData(item.name);
+            if (chainData) {
+              chainsData[item.name] = chainData;
+              logToFile(logModuleName, `Fetched and saved data for chain: ${item.name}`);
+            }
           }
         }
       }
@@ -110,4 +115,4 @@ fetchChains().then(() => {
   setInterval(checkAndUpdateChains, UPDATE_INTERVAL);
 });
 
-export { fetchChainData, checkAndUpdateChains };
+export { fetchChainData, checkAndUpdateChains, fetchChains };
