@@ -20,7 +20,7 @@ async function updateChainData(chainName: string): Promise<void> {
       chainsData[chainName] = chainData;
       saveChainsData(chainsData);
 
-      const initialRpcUrl = `${chainsData[chainName]['rpc-addresses'][0]}/net_info`;
+      const initialRpcUrl = `${chainsData[chainName]['rpc-addresses'][0].replace(/\/$/, '')}/net_info`;
       console.log(`Starting network crawl from: ${initialRpcUrl}`);
       logToFile(logModuleName, `Starting network crawl from: ${initialRpcUrl}`);
       await crawlNetwork(chainName, initialRpcUrl, 3, 0);
@@ -40,7 +40,7 @@ async function updateEndpointData(chainName: string): Promise<void> {
       return;
     }
 
-    const initialRpcUrl = `${chainsData[chainName]['rpc-addresses'][0]}/net_info`;
+    const initialRpcUrl = `${chainsData[chainName]['rpc-addresses'][0].replace(/\/$/, '')}/net_info`;
     console.log(`Starting endpoint update from: ${initialRpcUrl}`);
     logToFile(logModuleName, `Starting endpoint update from: ${initialRpcUrl}`);
     await crawlNetwork(chainName, initialRpcUrl, 3, 0);
@@ -106,7 +106,7 @@ async function proxyRequest(chain: string, endpoint: string, res: Response): Pro
   let currentIndex = 0;
 
   while (!successfulResponse && currentIndex < rpcAddresses.length) {
-    const rpcAddress = rpcAddresses[currentIndex];
+    const rpcAddress = rpcAddresses[currentIndex].replace(/\/$/, '');
     const url = `${rpcAddress}/${endpoint}`;
     console.log(`Proxying request to: ${url}`);
     logToFile(logModuleName, `Proxying request to: ${url}`);

@@ -103,7 +103,7 @@ async function crawlNetwork(chainName: string, url: string, maxDepth: number, cu
     logToFile(logModuleName, `Skipping rejected or local IP: ${url}`);
     return;
   }
-
+ 
   if (goodIPs[hostname] && Date.now() - goodIPs[hostname] < 24 * 60 * 60 * 1000) {
     logToFile(logModuleName, `Skipping recently crawled good IP: ${url}`);
     return;
@@ -133,11 +133,9 @@ async function crawlNetwork(chainName: string, url: string, maxDepth: number, cu
   const crawlPromises = peers.map(async (peer) => {
     const remoteIp = peer.remote_ip;
 
-    let rpcAddress = peer.node_info.other.rpc_address.replace('tcp://', 'http://');
-    if (rpcAddress.includes(':')) {
-      rpcAddress = rpcAddress.split(':')[0];
-    }
-    rpcAddress = `${rpcAddress}:26657`;
+    let rpcAddress = peer.node_info.other.rpc_address.replace('tcp://', 'http://').replace('0.0.0.0', remoteIp).replace('127.0.0.1', remoteIp);
+    rpcAddress = rpcAddress.split(':')[0]; // Remove any port if exists
+    rpcAddress = `${rpcAddress}:26657`; // Always use the correct port
 
     // Ensure the URL is valid
     try {
