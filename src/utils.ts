@@ -15,6 +15,9 @@ const GOOD_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/go
 const LOGS_DIR_PATH = path.resolve(getDirName(import.meta.url), '../logs');
 
 export function ensureFilesExist() {
+  if (!fs.existsSync(path.dirname(CHAINS_FILE_PATH))) {
+    fs.mkdirSync(path.dirname(CHAINS_FILE_PATH), { recursive: true });
+  }
   if (!fs.existsSync(CHAINS_FILE_PATH)) {
     fs.writeFileSync(CHAINS_FILE_PATH, JSON.stringify({}));
   }
@@ -30,6 +33,9 @@ export function ensureFilesExist() {
 }
 
 export function loadChainsData(): Record<string, ChainEntry> {
+  if (!fs.existsSync(path.dirname(CHAINS_FILE_PATH))) {
+    fs.mkdirSync(path.dirname(CHAINS_FILE_PATH), { recursive: true });
+  }
   ensureFilesExist();
   try {
     const data = fs.readFileSync(CHAINS_FILE_PATH, 'utf-8');
@@ -41,6 +47,9 @@ export function loadChainsData(): Record<string, ChainEntry> {
 }
 
 export function saveChainsData(chainsData: Record<string, ChainEntry>) {
+  if (!fs.existsSync(path.dirname(CHAINS_FILE_PATH))) {
+    fs.mkdirSync(path.dirname(CHAINS_FILE_PATH), { recursive: true });
+  }
   try {
     fs.writeFileSync(CHAINS_FILE_PATH, JSON.stringify(chainsData, null, 2));
     console.log('Chains data saved.');
@@ -50,6 +59,9 @@ export function saveChainsData(chainsData: Record<string, ChainEntry>) {
 }
 
 export function loadRejectedIPs(): Set<string> {
+  if (!fs.existsSync(path.dirname(REJECTED_IPS_FILE_PATH))) {
+    fs.mkdirSync(path.dirname(REJECTED_IPS_FILE_PATH), { recursive: true });
+  }
   ensureFilesExist();
   try {
     const data = fs.readFileSync(REJECTED_IPS_FILE_PATH, 'utf-8');
@@ -61,6 +73,9 @@ export function loadRejectedIPs(): Set<string> {
 }
 
 export function saveRejectedIPs(rejectedIPs: Set<string>) {
+  if (!fs.existsSync(path.dirname(REJECTED_IPS_FILE_PATH))) {
+    fs.mkdirSync(path.dirname(REJECTED_IPS_FILE_PATH), { recursive: true });
+  }
   try {
     fs.writeFileSync(REJECTED_IPS_FILE_PATH, JSON.stringify(Array.from(rejectedIPs), null, 2));
     console.log('Rejected IPs saved.');
@@ -70,6 +85,9 @@ export function saveRejectedIPs(rejectedIPs: Set<string>) {
 }
 
 export function loadGoodIPs(): Record<string, number> {
+  if (!fs.existsSync(path.dirname(GOOD_IPS_FILE_PATH))) {
+    fs.mkdirSync(path.dirname(GOOD_IPS_FILE_PATH), { recursive: true });
+  }
   ensureFilesExist();
   try {
     const data = fs.readFileSync(GOOD_IPS_FILE_PATH, 'utf-8');
@@ -81,6 +99,9 @@ export function loadGoodIPs(): Record<string, number> {
 }
 
 export function saveGoodIPs(goodIPs: Record<string, number>) {
+  if (!fs.existsSync(path.dirname(GOOD_IPS_FILE_PATH))) {
+    fs.mkdirSync(path.dirname(GOOD_IPS_FILE_PATH), { recursive: true });
+  }
   try {
     fs.writeFileSync(GOOD_IPS_FILE_PATH, JSON.stringify(goodIPs, null, 2));
     console.log('Good IPs saved.');

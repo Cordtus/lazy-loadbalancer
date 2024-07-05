@@ -23,6 +23,12 @@ const goodIPs = loadGoodIPs();
 const timeout = 3000; // Timeout for requests in milliseconds
 const logModuleName = 'crawler';
 
+interface JsonRpcResponse<T> {
+  jsonrpc: string;
+  id: number;
+  result: T;
+}
+
 async function fetchNetInfo(url: string): Promise<NetInfo | null> {
   logToFile(logModuleName, `Fetching ${url}`);
   try {
@@ -30,12 +36,13 @@ async function fetchNetInfo(url: string): Promise<NetInfo | null> {
     const id = setTimeout(() => controller.abort(), timeout);
     const response = await fetch(url, { signal: controller.signal } as RequestInit);
     clearTimeout(id);
-    const data = (await response.json()) as { result: NetInfo };
+    const data = (await response.json()) as JsonRpcResponse<NetInfo>;
     logToFile(logModuleName, `Fetched ${url} successfully`);
     return data.result;
   } catch (error) {
-    console.error(`Error fetching ${url}:`, (error as Error).message);
-    logToFile(logModuleName, `Error fetching ${url}: ${(error as Error).message}`);
+    const err = error as Error;
+    console.error(`Error fetching ${url}:`, err.message);
+    logToFile(logModuleName, `Error fetching ${url}: ${err.message}`);
     return null;
   }
 }
@@ -47,12 +54,13 @@ async function fetchStatus(url: string): Promise<StatusInfo | null> {
     const id = setTimeout(() => controller.abort(), timeout);
     const response = await fetch(url, { signal: controller.signal } as RequestInit);
     clearTimeout(id);
-    const data = (await response.json()) as { result: StatusInfo };
+    const data = (await response.json()) as JsonRpcResponse<StatusInfo>;
     logToFile(logModuleName, `Fetched ${url} successfully`);
     return data.result;
   } catch (error) {
-    console.error(`Error fetching ${url}:`, (error as Error).message);
-    logToFile(logModuleName, `Error fetching ${url}: ${(error as Error).message}`);
+    const err = error as Error;
+    console.error(`Error fetching ${url}:`, err.message);
+    logToFile(logModuleName, `Error fetching ${url}: ${err.message}`);
     return null;
   }
 }
@@ -65,11 +73,12 @@ async function validateEndpoint(url: string): Promise<boolean> {
     const response = await fetch(url, { signal: controller.signal } as RequestInit);
     clearTimeout(id);
     logToFile(logModuleName, `Validation response from ${url}: ${response.status} ${response.statusText}`);
-    const statusInfo = await response.json() as { result: StatusInfo };
-    return response.ok && statusInfo.result.node_info.other.tx_index === 'on';
+    const data = (await response.json()) as JsonRpcResponse<StatusInfo>;
+    return response.ok && data.result.node_info.other.tx_index === 'on';
   } catch (error) {
-    console.error(`Error validating endpoint ${url}:`, (error as Error).message);
-    logToFile(logModuleName, `Error validating endpoint ${url}: ${(error as Error).message}`);
+    const err = error as Error;
+    console.error(`Error validating endpoint ${url}:`, err.message);
+    logToFile(logModuleName, `Error validating endpoint ${url}: ${err.message}`);
     return false;
   }
 }
@@ -84,8 +93,9 @@ async function crawlNetwork(chainName: string, url: string, maxDepth: number, cu
   try {
     hostname = new URL(url).hostname;
   } catch (error) {
-    console.error(`Invalid URL: ${url}`, error);
-    logToFile(logModuleName, `Invalid URL: ${url} - ${(error as Error).message}`);
+    const err = error as Error;
+    console.error(`Invalid URL: ${url}`, err.message);
+    logToFile(logModuleName, `Invalid URL: ${url} - ${err.message}`);
     return;
   }
 
@@ -131,8 +141,9 @@ async function crawlNetwork(chainName: string, url: string, maxDepth: number, cu
     try {
       new URL(rpcAddress);
     } catch (error) {
-      console.error(`Invalid RPC address: ${rpcAddress}`, error);
-      logToFile(logModuleName, `Invalid RPC address: ${rpcAddress} - ${(error as Error).message}`);
+      const err = error as Error;
+      console.error(`Invalid RPC address: ${rpcAddress}`, err.message);
+      logToFile(logModuleName, `Invalid RPC address: ${rpcAddress} - ${err.message}`);
       return;
     }
 
@@ -192,8 +203,9 @@ async function fetchRPCAddresses(chainName: string): Promise<string[]> {
       return chainData.apis?.rpc?.map((rpc: { address: string }) => rpc.address) || [];
     }
   } catch (error) {
-    console.error(`Error fetching RPC addresses for ${chainName}:`, error);
-    logToFile(logModuleName, `Error fetching RPC addresses for ${chainName}: ${error}`);
+    const err = error as Error;
+    console.error(`Error fetching RPC addresses for ${chainName}:`, err.message);
+    logToFile(logModuleName, `Error fetching RPC addresses for ${chainName}: ${err.message}`);
   }
   return [];
 }

@@ -19,6 +19,8 @@ const logModuleName = 'fetchChains';
 
 async function fetchChainData(chain: string): Promise<ChainEntry | null> {
   const url = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/${chain}/chain.json`;
+logToFile(logModuleName, `Fetching chain data from URL: ${url}`);
+
 
   try {
     logToFile(logModuleName, `Fetching data for chain: ${chain}`);

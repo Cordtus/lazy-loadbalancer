@@ -41,7 +41,13 @@ async function updateEndpointData(chainName: string) {
       return;
     }
 
-    const initialRpcUrl = chainEntry['rpc-addresses'][0] + '/net_info';
+    const initialRpcUrl = chainsData[chainName]['rpc-addresses']?.[0] ? chainsData[chainName]['rpc-addresses'][0] + '/net_info' : null;
+if (!initialRpcUrl) {
+  console.error(`No RPC addresses available for chain: ${chainName}`);
+  logToFile(logModuleName, `No RPC addresses available for chain: ${chainName}`);
+  return;
+}
+
     console.log(`Starting endpoint update from: ${initialRpcUrl}`);
     logToFile(logModuleName, `Starting endpoint update from: ${initialRpcUrl}`);
     await crawlNetwork(chainName, initialRpcUrl, 3, 0);
