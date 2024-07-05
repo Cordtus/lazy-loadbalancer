@@ -99,8 +99,8 @@ async function crawlNetwork(chainName: string, url: string, maxDepth: number, cu
     return;
   }
 
-  if (rejectedIPs.has(hostname)) {
-    logToFile(logModuleName, `Skipping rejected IP: ${url}`);
+  if (rejectedIPs.has(hostname) || ['0.0.0.0', '127.0.0.1'].includes(hostname)) {
+    logToFile(logModuleName, `Skipping rejected or local IP: ${url}`);
     return;
   }
 
@@ -132,10 +132,12 @@ async function crawlNetwork(chainName: string, url: string, maxDepth: number, cu
   const chainsData = loadChainsData();
   const crawlPromises = peers.map(async (peer) => {
     const remoteIp = peer.remote_ip;
-    let rpcAddress = peer.node_info.other.rpc_address
-      .replace('tcp://', 'http://')
-      .replace('0.0.0.0', remoteIp)
-      .replace('127.0.0.1', remoteIp);
+
+    let rpcAddress = peer.node_info.other.rpc_address.replace('tcp://', 'http://');
+    if (rpcAddress.includes(':')) {
+      rpcAddress = rpcAddress.split(':')[0];
+    }
+    rpcAddress = `${rpcAddress}:26657`;
 
     // Ensure the URL is valid
     try {
@@ -214,8 +216,6 @@ async function updateChains() {
   const chainsData: { [key: string]: ChainEntry } = loadChainsData();
 
   for (const chainName of Object.keys(chainsData)) {
-    console.log(`Fetching RPC addresses for ${chainName}...`);
-    logToFile(logModuleName, `Fetching RPC addresses for ${chainName}...`);
     const rpcAddresses = await fetchRPCAddresses(chainName);
     chainsData[chainName]['rpc-addresses'] = rpcAddresses;
     console.log(`${chainName}: ${rpcAddresses.length} RPC addresses found.`);

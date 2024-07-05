@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import { crawlNetwork, updateChains } from './crawler.js';
 import { ChainEntry } from './types.js';
 import { fetchChainData, checkAndUpdateChains, fetchChains } from './fetchChains.js';
@@ -11,17 +11,16 @@ const PORT = process.env.PORT || 3000;
 ensureFilesExist();
 
 const logModuleName = 'balancer';
-
 let chainsData: Record<string, ChainEntry> = loadChainsData();
 
-async function updateChainData(chainName: string) {
+async function updateChainData(chainName: string): Promise<void> {
   try {
     const chainData = await fetchChainData(chainName);
     if (chainData) {
       chainsData[chainName] = chainData;
       saveChainsData(chainsData);
 
-      const initialRpcUrl = chainsData[chainName]['rpc-addresses'][0] + '/net_info';
+      const initialRpcUrl = `${chainsData[chainName]['rpc-addresses'][0]}/net_info`;
       console.log(`Starting network crawl from: ${initialRpcUrl}`);
       logToFile(logModuleName, `Starting network crawl from: ${initialRpcUrl}`);
       await crawlNetwork(chainName, initialRpcUrl, 3, 0);
@@ -32,7 +31,7 @@ async function updateChainData(chainName: string) {
   }
 }
 
-async function updateEndpointData(chainName: string) {
+async function updateEndpointData(chainName: string): Promise<void> {
   try {
     const chainEntry = chainsData[chainName];
     if (!chainEntry) {
@@ -41,13 +40,7 @@ async function updateEndpointData(chainName: string) {
       return;
     }
 
-    const initialRpcUrl = chainsData[chainName]['rpc-addresses']?.[0] ? chainsData[chainName]['rpc-addresses'][0] + '/net_info' : null;
-if (!initialRpcUrl) {
-  console.error(`No RPC addresses available for chain: ${chainName}`);
-  logToFile(logModuleName, `No RPC addresses available for chain: ${chainName}`);
-  return;
-}
-
+    const initialRpcUrl = `${chainsData[chainName]['rpc-addresses'][0]}/net_info`;
     console.log(`Starting endpoint update from: ${initialRpcUrl}`);
     logToFile(logModuleName, `Starting endpoint update from: ${initialRpcUrl}`);
     await crawlNetwork(chainName, initialRpcUrl, 3, 0);
@@ -57,7 +50,7 @@ if (!initialRpcUrl) {
   }
 }
 
-async function speedTest(chainName: string) {
+async function speedTest(chainName: string): Promise<void> {
   const chainEntry = chainsData[chainName];
   if (!chainEntry) {
     console.error(`Chain ${chainName} does not exist.`);
@@ -66,7 +59,7 @@ async function speedTest(chainName: string) {
   }
 
   const rpcAddresses = chainEntry['rpc-addresses'];
-  const results = [];
+  const results: number[] = [];
   const exclusionList = new Set<string>();
 
   for (const rpcAddress of rpcAddresses) {
@@ -78,9 +71,7 @@ async function speedTest(chainName: string) {
       const startTime = Date.now();
       const response = await fetch(`${rpcAddress}/status`);
       const endTime = Date.now();
-      if (response.status === 429) {
-        exclusionList.add(rpcAddress);
-      } else if (!response.ok) {
+      if (response.status === 429 || !response.ok) {
         exclusionList.add(rpcAddress);
       } else {
         results.push(endTime - startTime);
@@ -104,10 +95,11 @@ async function speedTest(chainName: string) {
   logToFile(logModuleName, `Requests per second: ${1000 / avgTimePerRequest}`);
 }
 
-async function proxyRequest(chain: string, endpoint: string, res: express.Response) {
+async function proxyRequest(chain: string, endpoint: string, res: Response): Promise<void> {
   const rpcAddresses = chainsData[chain]?.['rpc-addresses'];
   if (!rpcAddresses || rpcAddresses.length === 0) {
-    return res.status(500).send('No RPC addresses available for the specified chain.');
+    res.status(500).send('No RPC addresses available for the specified chain.');
+    return;
   }
 
   let successfulResponse = false;
@@ -115,16 +107,17 @@ async function proxyRequest(chain: string, endpoint: string, res: express.Respon
 
   while (!successfulResponse && currentIndex < rpcAddresses.length) {
     const rpcAddress = rpcAddresses[currentIndex];
-    console.log(`Proxying request to: ${rpcAddress}/${endpoint}`);
-    logToFile(logModuleName, `Proxying request to: ${rpcAddress}/${endpoint}`);
+    const url = `${rpcAddress}/${endpoint}`;
+    console.log(`Proxying request to: ${url}`);
+    logToFile(logModuleName, `Proxying request to: ${url}`);
     try {
-      const response = await fetch(`${rpcAddress}/${endpoint}`);
+      const response = await fetch(url);
       const data = await response.json();
       res.json(data);
       successfulResponse = true;
     } catch (error) {
-      console.error(`Error proxying request to ${rpcAddress}/${endpoint}:`, error);
-      logToFile(logModuleName, `Error proxying request to ${rpcAddress}/${endpoint}: ${error}`);
+      console.error(`Error proxying request to ${url}:`, error);
+      logToFile(logModuleName, `Error proxying request to ${url}: ${error}`);
       currentIndex++;
     }
   }
@@ -137,7 +130,7 @@ async function proxyRequest(chain: string, endpoint: string, res: express.Respon
 
 app.use(express.json());
 
-app.post('/add-chain', async (req, res) => {
+app.post('/add-chain', async (req: Request, res: Response) => {
   const { chainName } = req.body;
   if (!chainName) {
     return res.status(400).send('Chain name is required.');
@@ -150,7 +143,7 @@ app.post('/add-chain', async (req, res) => {
   res.send('Chain added and data updated.');
 });
 
-app.post('/update-chain-data', async (req, res) => {
+app.post('/update-chain-data', async (req: Request, res: Response) => {
   const { chainName } = req.body;
   if (!chainName) {
     return res.status(400).send('Chain name is required.');
@@ -160,7 +153,7 @@ app.post('/update-chain-data', async (req, res) => {
   res.send(`Chain data for ${chainName} updated.`);
 });
 
-app.post('/update-endpoint-data', async (req, res) => {
+app.post('/update-endpoint-data', async (req: Request, res: Response) => {
   const { chainName } = req.body;
   if (!chainName) {
     return res.status(400).send('Chain name is required.');
@@ -170,14 +163,15 @@ app.post('/update-endpoint-data', async (req, res) => {
   res.send(`Endpoint data for ${chainName} updated.`);
 });
 
-app.get('/speed-test/:chainName', async (req, res) => {
+app.get('/speed-test/:chainName', async (req: Request, res: Response) => {
   const { chainName } = req.params;
   await speedTest(chainName);
   res.send(`Speed test for ${chainName} completed. Check logs for details.`);
 });
 
-app.get('/rpc-lb/:chain/:endpoint', async (req, res) => {
-  const { chain, endpoint } = req.params;
+app.get('/rpc-lb/:chain/*', async (req: Request, res: Response) => {
+  const { chain } = req.params;
+  const endpoint = req.url.split(`${chain}/`)[1];
 
   if (!chainsData[chain]) {
     console.log(`Chain data for ${chain} not found, updating...`);
@@ -188,12 +182,12 @@ app.get('/rpc-lb/:chain/:endpoint', async (req, res) => {
   await proxyRequest(chain, endpoint, res);
 });
 
-app.post('/update-all-chains', async (req, res) => {
+app.post('/update-all-chains', async (req: Request, res: Response) => {
   await fetchChains();
   res.send('All chains data updated.');
 });
 
-app.post('/:chain/update-chain', async (req, res) => {
+app.post('/:chain/update-chain', async (req: Request, res: Response) => {
   const { chain } = req.params;
   if (!chain) {
     return res.status(400).send('Chain name is required.');
@@ -203,7 +197,7 @@ app.post('/:chain/update-chain', async (req, res) => {
   res.send(`Chain data for ${chain} updated.`);
 });
 
-app.post('/crawl-all-chains', async (req, res) => {
+app.post('/crawl-all-chains', async (req: Request, res: Response) => {
   const chainsData: { [key: string]: ChainEntry } = loadChainsData();
   const maxDepth = 3;
 
@@ -217,14 +211,14 @@ app.post('/crawl-all-chains', async (req, res) => {
   res.send('Crawled all chains.');
 });
 
-app.post('/:chain/crawl-chain', async (req, res) => {
+app.post('/:chain/crawl-chain', async (req: Request, res: Response) => {
   const { chain } = req.params;
   const chainEntry = chainsData[chain];
   if (!chainEntry) {
     return res.status(400).send(`Chain ${chain} not found.`);
   }
 
-  const initialRpcUrl = chainEntry['rpc-addresses'][0] + '/net_info';
+  const initialRpcUrl = `${chainEntry['rpc-addresses'][0]}/net_info`;
   await crawlNetwork(chain, initialRpcUrl, 3, 0);
   res.send(`Crawled chain ${chain}.`);
 });
