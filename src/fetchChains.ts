@@ -2,7 +2,9 @@ import { Octokit } from "@octokit/core";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
 import { ChainEntry, ChainData } from "./types";
-import { ensureFilesExist, loadChainsData, saveChainsData, logToFile, getDirName } from './utils.js';
+import { ensureFilesExist, loadChainsData, logToFile, saveChainsData } from './utils.js';
+import { appLogger as logger } from './logger.js';
+import config from './config.js';
 
 dotenv.config();
 
@@ -48,13 +50,13 @@ async function fetchChainData(chain: string): Promise<ChainEntry | null> {
 }
 
 async function fetchChains() {
-  ensureFilesExist();  // Ensure file exists before starting
+  ensureFilesExist();
 
   try {
-    logToFile(logModuleName, `Fetching chains...`);
+    logger.info(`Fetching chains...`);
     const response = await octokit.request(`GET /repos/{owner}/{repo}/contents`, {
-      owner: REPO_OWNER,
-      repo: REPO_NAME,
+      owner: config.github.owner,
+      repo: config.github.repo,
     });
 
     const chainsData: { [key: string]: ChainEntry } = loadChainsData();
@@ -69,11 +71,11 @@ async function fetchChains() {
           item.name !== "testnets"
         ) {
           const chainEntry = chainsData[item.name];
-          if (!chainEntry || !chainEntry.timestamp || now - chainEntry.timestamp > CHECK_INTERVAL) {
+          if (!chainEntry || !chainEntry.timestamp || now - chainEntry.timestamp > config.chains.checkInterval) {
             const chainData = await fetchChainData(item.name);
             if (chainData) {
               chainsData[item.name] = chainData;
-              logToFile(logModuleName, `Fetched and saved data for chain: ${item.name}`);
+              logger.info(`Fetched and saved data for chain: ${item.name}`);
             }
           }
         }
@@ -81,11 +83,9 @@ async function fetchChains() {
     }
 
     saveChainsData(chainsData);
-    console.log("Chains data saved.");
-    logToFile(logModuleName, "Chains data saved.");
+    logger.info(`Chains data saved: ${JSON.stringify(chainsData, null, 2)}`);
   } catch (error) {
-    console.error("Error fetching chains data:", error);
-    logToFile(logModuleName, `Error fetching chains data: ${error}`);
+    logger.error("Error fetching chains data:", error);
   }
 }
 

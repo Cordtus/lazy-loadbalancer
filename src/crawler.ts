@@ -4,7 +4,7 @@ import { loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, loadG
 import config from './config.js';
 import dns from 'dns';
 import { promisify } from 'util';
-import logger from './logger.js';
+import { crawlerLogger as logger } from './logger.js';
 
 const ping = promisify(dns.lookup);
 

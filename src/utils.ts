@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ChainEntry } from './types.js';
+import { appLogger as logger } from './logger.js';
 
 // Workaround for __dirname in ES module
 export function getDirName(metaUrl: string): string {
@@ -39,9 +40,11 @@ export function loadChainsData(): Record<string, ChainEntry> {
   ensureFilesExist();
   try {
     const data = fs.readFileSync(CHAINS_FILE_PATH, 'utf-8');
-    return JSON.parse(data);
+    const parsedData = JSON.parse(data);
+    logger.info(`Loaded chains data: ${JSON.stringify(parsedData, null, 2)}`);
+    return parsedData;
   } catch (error) {
-    console.error('Error reading chains file:', error);
+    logger.error('Error reading chains file:', error);
     return {};
   }
 }
