@@ -78,6 +78,8 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
     const rpcAddress = rpcAddresses[rpcIndexMap[chain]];
     const url = new URL(`${rpcAddress.replace(/\/$/, '')}/${endpoint}`);
     logger.info(`Proxying ${req.method} request to: ${url.href}`);
+    logger.debug(`Request headers: ${JSON.stringify(req.headers)}`);
+    logger.debug(`Request body: ${JSON.stringify(req.body)}`);
 
     try {
       const fetchOptions: RequestInit = {
@@ -96,10 +98,13 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
       };
 
       const response = await fetch(url.href, fetchOptions);
+      const responseText = await response.text();
+
+      logger.debug(`Response status: ${response.status}`);
+      logger.debug(`Response headers: ${JSON.stringify(Object.fromEntries(response.headers))}`);
+      logger.debug(`Response body: ${responseText}`);
 
       if (response.ok) {
-        const data = await response.text();
-        
         // Set safe headers
         for (const [key, value] of response.headers.entries()) {
           if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
@@ -107,7 +112,13 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
           }
         }
         
-        res.status(response.status).send(data);
+        // Try to parse as JSON, if it fails, send as text
+        try {
+          const jsonData = JSON.parse(responseText);
+          res.status(response.status).json(jsonData);
+        } catch {
+          res.status(response.status).send(responseText);
+        }
         return;
       } else {
         logger.error(`Non-OK response from ${url.href}: ${response.status}`);
@@ -130,7 +141,8 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
   res.status(502).send('Unable to process request after multiple attempts');
 }
 
-// Update the route handler to use /lb/ instead of /rpc-lb/
+app.use(express.json());
+
 app.all('/lb/:chain/*', async (req: Request, res: Response) => {
   const { chain } = req.params;
   const endpoint = req.params[0];
@@ -144,14 +156,20 @@ app.all('/lb/:chain/*', async (req: Request, res: Response) => {
       logger.info(`Chain data for ${chain} not found, updating...`);
       await updateChainData(chain);
     }
+    
+    // You can add conditional logic here if needed
+    if (someCondition) {
+      // Handle one case
+    } else {
+      // Handle another case
+    }
+
     await proxyRequest(chain, endpoint, req, res);
   } catch (error) {
     logger.error(`Error proxying request for ${chain}/${endpoint}:`, error);
     res.status(500).send(`Error proxying request: ${(error as Error).message}`);
   }
 });
-
-app.use(express.json());
 
 app.post('/add-chain', async (req: Request, res: Response) => {
   const { chainName } = req.body;
