@@ -4,7 +4,6 @@ import { fileURLToPath } from 'url';
 import { ChainEntry } from './types.js';
 import { appLogger as logger } from './logger.js';
 
-// Workaround for __dirname in ES module
 export function getDirName(metaUrl: string): string {
   const __filename = fileURLToPath(metaUrl);
   return path.dirname(__filename);
@@ -14,6 +13,7 @@ const CHAINS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/chai
 const REJECTED_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/rejected_ips.json');
 const GOOD_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/good_ips.json');
 const LOGS_DIR_PATH = path.resolve(getDirName(import.meta.url), '../logs');
+const BLACKLISTED_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/blacklisted_ips.json');
 
 export function ensureFilesExist() {
   if (!fs.existsSync(path.dirname(CHAINS_FILE_PATH))) {
@@ -30,6 +30,9 @@ export function ensureFilesExist() {
   }
   if (!fs.existsSync(LOGS_DIR_PATH)) {
     fs.mkdirSync(LOGS_DIR_PATH);
+  }
+  if (!fs.existsSync(BLACKLISTED_IPS_FILE_PATH)) {
+    fs.writeFileSync(BLACKLISTED_IPS_FILE_PATH, JSON.stringify([]));
   }
 }
 
@@ -55,9 +58,9 @@ export function saveChainsData(chainsData: Record<string, ChainEntry>) {
   }
   try {
     fs.writeFileSync(CHAINS_FILE_PATH, JSON.stringify(chainsData, null, 2));
-    console.log('Chains data saved.');
+    logger.info('Chains data saved.');
   } catch (error) {
-    console.error('Error writing chains file:', error);
+    logger.error('Error writing chains file:', error);
   }
 }
 
@@ -70,7 +73,7 @@ export function loadRejectedIPs(): Set<string> {
     const data = fs.readFileSync(REJECTED_IPS_FILE_PATH, 'utf-8');
     return new Set(JSON.parse(data));
   } catch (error) {
-    console.error('Error reading rejected IPs file:', error);
+    logger.error('Error reading rejected IPs file:', error);
     return new Set();
   }
 }
@@ -81,9 +84,9 @@ export function saveRejectedIPs(rejectedIPs: Set<string>) {
   }
   try {
     fs.writeFileSync(REJECTED_IPS_FILE_PATH, JSON.stringify(Array.from(rejectedIPs), null, 2));
-    console.log('Rejected IPs saved.');
+    logger.info('Rejected IPs saved.');
   } catch (error) {
-    console.error('Error writing rejected IPs file:', error);
+    logger.error('Error writing rejected IPs file:', error);
   }
 }
 
@@ -96,7 +99,7 @@ export function loadGoodIPs(): Record<string, number> {
     const data = fs.readFileSync(GOOD_IPS_FILE_PATH, 'utf-8');
     return JSON.parse(data);
   } catch (error) {
-    console.error('Error reading good IPs file:', error);
+    logger.error('Error reading good IPs file:', error);
     return {};
   }
 }
@@ -107,9 +110,29 @@ export function saveGoodIPs(goodIPs: Record<string, number>) {
   }
   try {
     fs.writeFileSync(GOOD_IPS_FILE_PATH, JSON.stringify(goodIPs, null, 2));
-    console.log('Good IPs saved.');
+    logger.info('Good IPs saved.');
   } catch (error) {
-    console.error('Error writing good IPs file:', error);
+    logger.error('Error writing good IPs file:', error);
+  }
+}
+
+export function loadBlacklistedIPs(): string[] {
+  ensureFilesExist();
+  try {
+    const data = fs.readFileSync(BLACKLISTED_IPS_FILE_PATH, 'utf-8');
+    return JSON.parse(data);
+  } catch (error) {
+    logger.error('Error reading blacklisted IPs file:', error);
+    return [];
+  }
+}
+
+export function saveBlacklistedIPs(blacklistedIPs: string[]) {
+  try {
+    fs.writeFileSync(BLACKLISTED_IPS_FILE_PATH, JSON.stringify(blacklistedIPs, null, 2));
+    logger.info('Blacklisted IPs saved.');
+  } catch (error) {
+    logger.error('Error writing blacklisted IPs file:', error);
   }
 }
 
