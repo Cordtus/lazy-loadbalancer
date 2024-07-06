@@ -239,6 +239,11 @@ app.post('/:chain/crawl-chain', async (req: Request, res: Response) => {
   }
 });
 
+app.get('/view-chains-data', (req, res) => {
+  const chainsData = loadChainsData();
+  res.json(chainsData);
+});
+
 app.listen(PORT, () => {
   logger.info(`Load balancer running at http://localhost:${PORT}`);
   setInterval(checkAndUpdateChains, config.chains.checkInterval);

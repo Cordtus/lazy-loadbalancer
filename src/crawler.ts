@@ -91,6 +91,7 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
   const chainsData = loadChainsData();
   let toCheck: PeerInfo[] = [];
   const checked = new Set<string>();
+  const newlyDiscoveredRPCs: string[] = [];
 
   // Initial population of toCheck
   for (const url of initialRpcUrls) {
@@ -120,7 +121,7 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
           const isValid = await checkEndpoint(url);
           if (isValid) {
             if (!chainsData[chainName]['rpc-addresses'].includes(url)) {
-              chainsData[chainName]['rpc-addresses'].push(url);
+              newlyDiscoveredRPCs.push(url);
               goodIPs[ip] = Date.now();
               logger.info(`Added new RPC endpoint: ${url}`);
             }
@@ -129,15 +130,16 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
               newPeers.push(...extractPeerInfo(netInfo.peers));
             }
             return url;
+          } else {
+            rejectedIPs.add(ip);
+            return null;
           }
-          return null;
         })
       );
 
-      // Update chainsData and goodIPs
+      // Update goodIPs
       batchResults.filter(Boolean).forEach(url => {
-        if (url && !chainsData[chainName]['rpc-addresses'].includes(url)) {
-          chainsData[chainName]['rpc-addresses'].push(url);
+        if (url) {
           const ip = normalizeUrl(url);
           goodIPs[ip] = Date.now();
         }
@@ -149,9 +151,18 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
     if (toCheck.length === 0) break;
   }
 
+  // Update chainsData with newly discovered RPCs
+  chainsData[chainName] = {
+    ...chainsData[chainName],
+    'rpc-addresses': [...new Set([...chainsData[chainName]['rpc-addresses'], ...newlyDiscoveredRPCs])],
+    lastCrawled: new Date().toISOString()
+  };
+
   saveChainsData(chainsData);
   saveGoodIPs(goodIPs);
   saveRejectedIPs(rejectedIPs);
+
+  logger.info(`Crawl completed for ${chainName}. Discovered ${newlyDiscoveredRPCs.length} new RPC endpoints.`);
 }
 
 async function startCrawling(): Promise<void> {
