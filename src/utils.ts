@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { ChainEntry } from './types.js';
+import logger from './logger.js';
 
 // Workaround for __dirname in ES module
 export function getDirName(metaUrl: string): string {
@@ -51,10 +52,12 @@ export function saveChainsData(chainsData: Record<string, ChainEntry>) {
     fs.mkdirSync(path.dirname(CHAINS_FILE_PATH), { recursive: true });
   }
   try {
-    fs.writeFileSync(CHAINS_FILE_PATH, JSON.stringify(chainsData, null, 2));
-    console.log('Chains data saved.');
+    const existingData = loadChainsData();
+    const updatedData = { ...existingData, ...chainsData };
+    fs.writeFileSync(CHAINS_FILE_PATH, JSON.stringify(updatedData, null, 2));
+    logger.info('Chains data saved.');
   } catch (error) {
-    console.error('Error writing chains file:', error);
+    logger.error('Error writing chains file:', error);
   }
 }
 

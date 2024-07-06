@@ -6,10 +6,11 @@ export interface ChainEntry {
   'rpc-addresses': string[];
   timeout: string;
   apis?: {
-    rpc: Array<Api>;
-    rest: Array<Api>;
+    rpc: Array<{ address: string }>;
   };
   timestamp?: number;
+  lastUpdated?: string;
+  lastCrawled?: string;
 }
 
 export interface NetInfo {
