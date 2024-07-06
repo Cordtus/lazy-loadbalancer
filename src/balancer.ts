@@ -156,13 +156,6 @@ app.all('/lb/:chain/*', async (req: Request, res: Response) => {
       logger.info(`Chain data for ${chain} not found, updating...`);
       await updateChainData(chain);
     }
-    
-    // You can add conditional logic here if needed
-    if (someCondition) {
-      // Handle one case
-    } else {
-      // Handle another case
-    }
 
     await proxyRequest(chain, endpoint, req, res);
   } catch (error) {
