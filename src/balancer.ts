@@ -219,6 +219,7 @@ app.all('/lb/:chain/*', async (req: Request, res: Response) => {
       logger.info(`Chain data for ${chain} not found, updating...`);
       await updateChainData(chain);
     }
+
     await proxyRequest(chain, endpoint, req, res);
   } catch (error) {
     logger.error(`Error proxying request for ${chain}/${endpoint}:`, error);
