@@ -2,7 +2,7 @@ import { Octokit } from "@octokit/core";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
 import { ChainEntry, ChainData } from "./types";
-import { ensureChainsFileExists, loadChainsData, saveChainsData } from './utils.js';
+import { ensureFilesExist, loadChainsData, saveChainsData, logToFile, getDirName } from './utils.js';
 
 dotenv.config();
 
@@ -12,15 +12,20 @@ const octokit = new Octokit({
 
 const REPO_OWNER = "cosmos";
 const REPO_NAME = "chain-registry";
-const UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+const UPDATE_INTERVAL = 7 * 24 * 60 * 60 * 1000; // 7 days
+const CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+
+const logModuleName = 'fetchChains';
 
 async function fetchChainData(chain: string): Promise<ChainEntry | null> {
   const url = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/${chain}/chain.json`;
+  logToFile(logModuleName, `Fetching chain data from URL: ${url}`);
 
   try {
     const response = await fetch(url);
     if (!response.ok) {
       console.error(`Failed to fetch data for chain: ${chain}`);
+      logToFile(logModuleName, `Failed to fetch data for chain: ${chain}`);
       return null;
     }
 
@@ -37,20 +42,23 @@ async function fetchChainData(chain: string): Promise<ChainEntry | null> {
     };
   } catch (error) {
     console.error(`Error fetching data for chain ${chain}:`, error);
+    logToFile(logModuleName, `Error fetching data for chain ${chain}: ${error}`);
     return null;
   }
 }
 
 async function fetchChains() {
-  ensureChainsFileExists();  // Ensure file exists before starting
+  ensureFilesExist();  // Ensure file exists before starting
 
   try {
+    logToFile(logModuleName, `Fetching chains...`);
     const response = await octokit.request(`GET /repos/{owner}/{repo}/contents`, {
       owner: REPO_OWNER,
       repo: REPO_NAME,
     });
 
-    const chainsData: { [key: string]: ChainEntry } = {};
+    const chainsData: { [key: string]: ChainEntry } = loadChainsData();
+    const now = Date.now();
 
     if (Array.isArray(response.data)) {
       for (const item of response.data) {
@@ -60,9 +68,13 @@ async function fetchChains() {
           !item.name.startsWith("_") &&
           item.name !== "testnets"
         ) {
-          const chainData = await fetchChainData(item.name);
-          if (chainData) {
-            chainsData[item.name] = chainData;
+          const chainEntry = chainsData[item.name];
+          if (!chainEntry || !chainEntry.timestamp || now - chainEntry.timestamp > CHECK_INTERVAL) {
+            const chainData = await fetchChainData(item.name);
+            if (chainData) {
+              chainsData[item.name] = chainData;
+              logToFile(logModuleName, `Fetched and saved data for chain: ${item.name}`);
+            }
           }
         }
       }
@@ -70,8 +82,10 @@ async function fetchChains() {
 
     saveChainsData(chainsData);
     console.log("Chains data saved.");
+    logToFile(logModuleName, "Chains data saved.");
   } catch (error) {
     console.error("Error fetching chains data:", error);
+    logToFile(logModuleName, `Error fetching chains data: ${error}`);
   }
 }
 
@@ -85,6 +99,7 @@ function checkAndUpdateChains() {
       const updatedChainData = await fetchChainData(chain);
       if (updatedChainData) {
         chainsData[chain] = updatedChainData;
+        logToFile(logModuleName, `Updated data for chain: ${chain}`);
       }
     }
   });
@@ -92,6 +107,7 @@ function checkAndUpdateChains() {
   Promise.all(promises).then(() => {
     saveChainsData(chainsData);
     console.log("Chains data updated.");
+    logToFile(logModuleName, "Chains data updated.");
   });
 }
 
@@ -99,4 +115,4 @@ fetchChains().then(() => {
   setInterval(checkAndUpdateChains, UPDATE_INTERVAL);
 });
 
-export { fetchChainData, checkAndUpdateChains };
+export { fetchChainData, checkAndUpdateChains, fetchChains };

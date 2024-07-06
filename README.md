@@ -1,13 +1,12 @@
 # Load Balancer for Cosmos SDK RPC Endpoints
 
-This project was inspired largely by Jacob Gadikian of [Notional](https://notional.ventures/)'s [RPC crawler](https://github.com/notional-labs) logic, and the [cosmos.directory](https://cosmos.directory) Load balanced proxy endpoint created by [Eco-stake](https://ecologi.com/ecostake), and by the desperate need of actually somewhat useful infrastructure on almost every existing IBC network. I give huge respect to the ones that offer reasonable access (you know who you are).
-
-This ie intended for personal use only, and is intended to reduce the overall load on the most commonly used infrastructure. It is a personal load balancer for many IBC networks' API endpoints using Node.js and Caddy. It dynamically fetches and caches RPC endpoint data for different chains and can be easily configured to do the same for REST or other API endpoints.
+This project implements a personal load balancer for IBC network API endpoints using Node.js. It dynamically fetches and caches RPC endpoint data for different chains, inspired by the work of Jacob Gadikian and the cosmos.directory project.
 
 ## Prerequisites
 
-- Node.js
-- Caddy
+- Node.js (v14 or later)
+- Yarn package manager
+- Caddy web server
 
 ## Setup
 
@@ -18,31 +17,35 @@ git clone https://github.com/yourusername/load-balancer.git
 cd load-balancer
 ```
 
-2. Install the Node.js dependencies:
+2. Install dependencies:
 
 ```bash
 yarn install
 ```
 
-3. Build the project:
+3. Create a `.env` file with your GitHub personal access token:
+
+```bash
+echo "GITHUB_PAT=your_github_personal_access_token" > .env
+```
+
+4. Build the project:
 
 ```bash
 yarn build
 ```
 
-4. Start the Node.js server:
+5. Start the Node.js server:
 
 ```bash
 yarn start
 ```
 
-5. Configure Caddy
+6. Configure Caddy:
 
-### Creating a `Caddyfile`
+Create a `Caddyfile` or add to an existing one:
 
-If this is your first time using Caddy, you'll have to create a `Caddyfile` (webserver config file) like the following example:
-
-```shell
+```
 {
   servers {
     listener_wrappers {
@@ -62,104 +65,68 @@ http://rpc-lb.*.example.com {
 }
 ```
 
-*Replace example.com with your domain.*
+Replace `example.com` with your domain.
 
-### Adding Load Balancer Configuration to an Existing Caddyfile
-
-If you already have a Caddyfile and want to add the load balancer configuration, follow these steps:
-
-- Create a new file called `lb.caddyfile`:
-
-```shell
-http://lb.example.com {
-  reverse_proxy /rpc-lb/*/* http://localhost:3000
-  reverse_proxy /add-chain http://localhost:3000
-  reverse_proxy /update-chain-data http://localhost:3000
-  reverse_proxy /update-endpoint-data http://localhost:3000
-  reverse_proxy /speed-test/* http://localhost:3000
-}
-```
-
-- In the existing `Caddyfile`, add the following line to import the new config:
-
-```shell
-import /path/to/lb.caddyfile
-```
-
-Your Caddyfile should look something like this:
-
-```shell
-# Your existing Caddy configuration
-{
-  email you@example.com
-  acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
-}
-
-example.com {
-  root * /var/www/html
-  file_server
-}
-
-# Import the load balancer configuration
-import /etc/caddy/lb.caddyfile
-```
-
-*Replace /path/to with the actual path to the lb.caddyfile.*
-
-6. Reload Caddy to apply the new configuration:
+7. Start Caddy:
 
 ```bash
-caddy reload --config /path/to/your/Caddyfile
-```
-
-7. Run Caddy:
-
-```bash
-caddy run --config /path/to/Caddyfile
+caddy run --config /path/to/your/Caddyfile
 ```
 
 ## Usage
 
-You can now access the load balancer by making a request to your Caddy server. Here are some example commands to run the various functions:
-
-### Adding a New Chain
-
-To add
-
- a new chain, send a POST request to the `/add-chain` endpoint:
-
-```bash
-curl -X POST http://lb.example.com/add-chain -H "Content-Type: application/json" -d '{"chainName": "akash"}'
-```
-
 ### Updating Chain Data
 
-To update the data for a specific chain, send a POST request to the `/update-chain-data` endpoint:
-
+Update all chains:
 ```bash
-curl -X POST http://lb.example.com/update-chain-data -H "Content-Type: application/json" -d '{"chainName": "akash"}'
+curl -X POST http://localhost:3000/update-all-chains
 ```
 
-### Updating Endpoint Data
-
-To update the endpoint data for a specific chain, send a POST request to the `/update-endpoint-data` endpoint:
-
+Update a specific chain:
 ```bash
-curl -X POST http://lb.example.com/update-endpoint-data -H "Content-Type: application/json" -d '{"chainName": "akash"}'
+curl -X POST http://localhost:3000/akash/update-chain
 ```
 
-### Running a Speed Test
+### Crawling Networks
 
-To run a speed test, send a GET request to the `/speed-test/<chainName>` endpoint:
-
+Crawl all chains:
 ```bash
-curl http://lb.example.com/speed-test/akash
+curl -X POST http://localhost:3000/crawl-all-chains
+```
+
+Crawl a specific chain:
+```bash
+curl -X POST http://localhost:3000/akash/crawl-chain
+```
+
+### Speed Testing
+
+Test the speed of endpoints for a specific chain:
+```bash
+curl http://localhost:3000/speed-test/akash
 ```
 
 ### Load Balancing RPC Requests
 
-To send a load-balanced RPC request, send a GET request to the `/rpc-lb/<chainName>/<endpoint>` endpoint:
-
+Send a load-balanced RPC request:
 ```bash
-curl http://lb.example.com/rpc-lb/akash/status
+curl http://localhost:3000/rpc-lb/akash/status
 ```
+
+## Logging
+
+Logs are stored in the `./logs` directory, with separate files for each module (balancer, crawler, fetchChains).
+
+## Directory Structure
+
+- `src/`: Source code
+- `data/`: JSON files for chain data and IP lists
+- `logs/`: Log files
+
+## Contributing
+
+Contributions are welcome. Please submit issues and pull requests on the project's GitHub repository.
+
+## License
+
+This project is licensed under the MIT License.

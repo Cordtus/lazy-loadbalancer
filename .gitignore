@@ -1,27 +1,22 @@
 # Node.js dependencies
 node_modules/
 dist/
+
 # Log files
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+logs/
+*.log
 
 # Environment variables
 .env
-
-# OS-specific files
-.DS_Store
-Thumbs.db
 
 # IDE-specific files
 .vscode/
 .idea/
 
-# Caddy log files
-/var/log/*.log
-
 # Miscellaneous
 chains.json
-node_modules
-# Yarn lock file
+good_ips.json
+rejected_ips.json
+
+# lock file
 yarn.lock

@@ -1,173 +1,164 @@
-import fetch, { RequestInit } from 'node-fetch';
-import { Octokit } from "@octokit/core";
-import dotenv from "dotenv";
-import { ChainEntry, NetInfo, StatusInfo } from './types.js';  // Import interfaces
-import { ensureChainsFileExists, loadChainsData, saveChainsData } from './utils.js';
+import fetch, { Response as FetchResponse } from 'node-fetch';
+import { ChainEntry, NetInfo, StatusInfo, Peer } from './types';
+import { loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, loadGoodIPs, saveGoodIPs } from './utils.js';
+import config from './config.js';
+import dns from 'dns';
+import { promisify } from 'util';
+import logger from './logger.js';
 
-dotenv.config();
-
-const octokit = new Octokit({
-  auth: process.env.GITHUB_PAT,
-});
-
-// Ensure chains.json file exists
-ensureChainsFileExists();
-
-const REPO_OWNER = "cosmos";
-const REPO_NAME = "chain-registry";
+const ping = promisify(dns.lookup);
 
 const visitedNodes = new Set<string>();
-const timeout = 3000; // Timeout for requests in milliseconds
+const rejectedIPs = loadRejectedIPs();
+const goodIPs = loadGoodIPs();
 
-async function fetchNetInfo(url: string): Promise<NetInfo | null> {
+const COMMON_PORTS = [443, 26657, 36657, 46657, 56657];
+
+interface PeerInfo {
+  id: string;
+  moniker: string;
+  ips: string[];
+}
+
+async function fetchWithTimeout(url: string): Promise<FetchResponse> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.crawler.timeout);
+
   try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    const response = await fetch(url, { signal: controller.signal } as RequestInit);
-    clearTimeout(id);
-    const data = (await response.json()) as { result: NetInfo };
-    return data.result;
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    return response;
   } catch (error) {
-    console.error(`Error fetching ${url}:`, (error as Error).message);
-    return null;
+    clearTimeout(timeout);
+    throw error;
   }
 }
 
-async function fetchStatus(url: string): Promise<StatusInfo | null> {
-  try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    const response = await fetch(url, { signal: controller.signal } as RequestInit);
-    clearTimeout(id);
-    const data = (await response.json()) as { result: StatusInfo };
-    return data.result;
-  } catch (error) {
-    console.error(`Error fetching ${url}:`, (error as Error).message);
-    return null;
-  }
+function normalizeUrl(url: string): string {
+  return url.replace(/^(https?:\/\/)?(.*?)(:\d+)?\/?$/, '$2');
 }
 
-async function fetchRPCAddresses(chainName: string): Promise<string[]> {
+async function isValidIp(ip: string): Promise<boolean> {
   try {
-    const response = await octokit.request(
-      `GET /repos/{owner}/{repo}/contents/{path}`,
-      {
-        owner: REPO_OWNER,
-        repo: REPO_NAME,
-        path: `${chainName}/chain.json`,
-      }
-    );
-
-    if (Array.isArray(response.data)) {
-      return [];
-    }
-
-    const fileData = response.data as { content?: string };
-    if (fileData.content) {
-      const content = Buffer.from(fileData.content, "base64").toString();
-      const chainData = JSON.parse(content);
-      return chainData.apis?.rpc?.map((rpc: { address: string }) => rpc.address) || [];
-    }
-  } catch (error) {
-    console.error(`Error fetching RPC addresses for ${chainName}:`, error);
-  }
-  return [];
-}
-
-async function validateEndpoint(url: string): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    const response = await fetch(url, { signal: controller.signal } as RequestInit);
-    clearTimeout(id);
-    return response.ok;
-  } catch (error) {
-    console.error(`Error validating endpoint ${url}:`, (error as Error).message);
+    await ping(ip);
+    return true;
+  } catch {
     return false;
   }
 }
 
-async function crawlNetwork(chainName: string, url: string, maxDepth: number, currentDepth = 0): Promise<void> {
-  if (currentDepth > maxDepth) {
-    return;
+async function fetchNetInfo(url: string): Promise<NetInfo | null> {
+  try {
+    const response = await fetchWithTimeout(`${url}/net_info`);
+    if (!response.ok) return null;
+    const data = await response.json() as { result: NetInfo };
+    return data.result;
+  } catch (error) {
+    logger.error(`Error fetching net_info from ${url}:`, error);
+    return null;
   }
-
-  const netInfo = await fetchNetInfo(url);
-  if (!netInfo) {
-    return;
-  }
-
-  const statusUrl = url.replace('/net_info', '/status');
-  const statusInfo = await fetchStatus(statusUrl);
-  if (statusInfo) {
-    const latestBlockHeight = statusInfo.sync_info.latest_block_height;
-    const latestBlockTime = statusInfo.sync_info.latest_block_time;
-    console.log(`Node: ${url}`);
-    console.log(`Latest Block Height: ${latestBlockHeight}`);
-    console.log(`Latest Block Time: ${latestBlockTime}`);
-  }
-
-  const peers = netInfo.peers;
-  const chainsData = loadChainsData();
-  const crawlPromises = peers.map(async (peer) => {
-    const remoteIp = peer.remote_ip;
-    let rpcAddress = peer.node_info.other.rpc_address.replace('tcp://', 'http://').replace('0.0.0.0', remoteIp);
-
-    // Ensure the URL is valid
-    if (!rpcAddress || rpcAddress === 'http://') {
-      return;
-    }
-
-    if (!visitedNodes.has(rpcAddress)) {
-      visitedNodes.add(rpcAddress);
-      console.log(`Crawling: ${rpcAddress}`);
-
-      // Validate the endpoint before adding
-      if (await validateEndpoint(`${rpcAddress}/status`)) {
-        if (!chainsData[chainName]['rpc-addresses'].includes(rpcAddress)) {
-          chainsData[chainName]['rpc-addresses'].push(rpcAddress);
-          saveChainsData(chainsData);
-          console.log(`Added new RPC endpoint: ${rpcAddress}`);
-        }
-      }
-
-      await crawlNetwork(chainName, `${rpcAddress}/net_info`, maxDepth, currentDepth + 1);
-    }
-  });
-
-  await Promise.all(crawlPromises);
 }
 
-async function updateChains() {
-  const chainsData: { [key: string]: ChainEntry } = loadChainsData();
+function extractPeerInfo(peers: Peer[]): PeerInfo[] {
+  return peers.map(peer => ({
+    id: peer.node_info.id,
+    moniker: peer.node_info.moniker,
+    ips: [
+      normalizeUrl(peer.node_info.listen_addr),
+      normalizeUrl(peer.remote_ip),
+      normalizeUrl(peer.node_info.other.rpc_address)
+    ].filter(ip => 
+      ip && 
+      ip !== '127.0.0.1' && 
+      ip !== '0.0.0.0' && 
+      !ip.includes(':') // Exclude IPv6
+    )
+  })).filter(peer => peer.ips.length > 0);
+}
 
-  for (const chainName of Object.keys(chainsData)) {
-    console.log(`Fetching RPC addresses for ${chainName}...`);
-    const rpcAddresses = await fetchRPCAddresses(chainName);
-    chainsData[chainName]['rpc-addresses'] = rpcAddresses;
-    console.log(`${chainName}: ${rpcAddresses.length} RPC addresses found.`);
+async function checkEndpoint(url: string): Promise<boolean> {
+  try {
+    const response = await fetchWithTimeout(`${url}/status`);
+    if (!response.ok) return false;
+    const data = await response.json() as { result: { node_info: { other: { tx_index: string } } } };
+    return data.result.node_info.other.tx_index === 'on';
+  } catch {
+    return false;
+  }
+}
+
+async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promise<void> {
+  const chainsData = loadChainsData();
+  let toCheck: PeerInfo[] = [];
+  const checked = new Set<string>();
+
+  // Initial population of toCheck
+  for (const url of initialRpcUrls) {
+    const netInfo = await fetchNetInfo(url);
+    if (netInfo) {
+      toCheck.push(...extractPeerInfo(netInfo.peers));
+    }
+  }
+
+  for (let round = 0; round < 5; round++) {
+    logger.info(`Starting round ${round + 1} of crawling for ${chainName}`);
+    const newPeers: PeerInfo[] = [];
+
+    // Batch IP validation
+    const validIps = (await Promise.all(
+      toCheck.flatMap(peer => peer.ips.map(async ip => ({ ip, valid: await isValidIp(ip) })))
+    )).filter(result => result.valid).map(result => result.ip);
+
+    // Batch port checking
+    for (const port of COMMON_PORTS) {
+      const batchResults = await Promise.all(
+        validIps.map(async ip => {
+          const url = `http${port === 443 ? 's' : ''}://${ip}:${port}`;
+          if (checked.has(url)) return null;
+          checked.add(url);
+          
+          const isValid = await checkEndpoint(url);
+          if (isValid) {
+            if (!chainsData[chainName]['rpc-addresses'].includes(url)) {
+              chainsData[chainName]['rpc-addresses'].push(url);
+              goodIPs[ip] = Date.now();
+              logger.info(`Added new RPC endpoint: ${url}`);
+            }
+            const netInfo = await fetchNetInfo(url);
+            if (netInfo) {
+              newPeers.push(...extractPeerInfo(netInfo.peers));
+            }
+            return url;
+          }
+          return null;
+        })
+      );
+
+      // Update chainsData and goodIPs
+      batchResults.filter(Boolean).forEach(url => {
+        if (url && !chainsData[chainName]['rpc-addresses'].includes(url)) {
+          chainsData[chainName]['rpc-addresses'].push(url);
+          const ip = normalizeUrl(url);
+          goodIPs[ip] = Date.now();
+        }
+      });
+    }
+
+    // Prepare for next round
+    toCheck = newPeers.filter(peer => !checked.has(peer.id));
+    if (toCheck.length === 0) break;
   }
 
   saveChainsData(chainsData);
-  console.log("Chains data updated with RPC addresses.");
+  saveGoodIPs(goodIPs);
+  saveRejectedIPs(rejectedIPs);
 }
 
-// Entry point to start crawling
-(async () => {
-  await updateChains();
-
-  // Load chainsData again to ensure updated data is used
-  const chainsData: { [key: string]: ChainEntry } = loadChainsData();
-
-  // Assuming we start crawling from some initial known RPC URL for each chain
-  const maxDepth = 3; // Define your desired crawling depth
-
-  for (const chainName of Object.keys(chainsData)) {
-    const initialRPCs = chainsData[chainName]['rpc-addresses'];
-    for (const rpc of initialRPCs) {
-      await crawlNetwork(chainName, `${rpc}/net_info`, maxDepth);
-    }
+async function startCrawling(): Promise<void> {
+  const chainsData = loadChainsData();
+  for (const [chainName, chainData] of Object.entries(chainsData)) {
+    await crawlNetwork(chainName, chainData['rpc-addresses']);
   }
-})();
+}
 
-export { crawlNetwork, fetchNetInfo };
+export { crawlNetwork, startCrawling };
