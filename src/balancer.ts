@@ -5,7 +5,7 @@ import { loadChainsData, saveChainsData, ensureFilesExist } from './utils.js';
 import { balancerLogger as logger } from './logger.js';
 import config from './config.js';
 import { ChainEntry } from './types.js';
-import fetch from 'node-fetch';
+import fetch, { RequestInit } from 'node-fetch';
 
 const app = express();
 const PORT = config.port;
@@ -105,16 +105,37 @@ async function proxyRequest(chain: string, endpoint: string, res: Response): Pro
     const url = `${rpcAddress.replace(/\/$/, '')}/${endpoint}`;
     logger.info(`Proxying request to: ${url}`);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, 5000);
+
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: controller.signal } as RequestInit);
+      clearTimeout(timeout);
+
       if (response.ok) {
         const data = await response.json();
         res.json(data);
         rpcIndexMap[chain] = (rpcIndexMap[chain] + 1) % rpcAddresses.length;
         return;
+      } else {
+        logger.error(`Non-OK response from ${url}: ${response.status}`);
+        const errorText = await response.text();
+        logger.error(`Response body: ${errorText}`);
+        if (response.status === 404) {
+          res.status(404).send('Endpoint not found.');
+          return;
+        }
       }
-    } catch (error) {
-      logger.error(`Error proxying request to ${url}:`, error);
+    } catch (error: any) {
+      clearTimeout(timeout);
+      if (error.name === 'AbortError') {
+        res.status(504).send('Request timed out.');
+        return;
+      } else {
+        logger.error(`Error proxying request to ${url}:`, error);
+      }
     }
 
     rpcIndexMap[chain] = (rpcIndexMap[chain] + 1) % rpcAddresses.length;
@@ -180,7 +201,7 @@ app.get('/speed-test/:chainName', async (req: Request, res: Response) => {
 
 app.get('/rpc-lb/:chain/*', async (req: Request, res: Response) => {
   const { chain } = req.params;
-  const endpoint = req.url.split(`${chain}/`)[1];
+  const endpoint = req.params[0];
 
   try {
     if (!chainsData[chain]) {
@@ -221,7 +242,7 @@ app.post('/crawl-all-chains', async (req: Request, res: Response) => {
     await startCrawling();
     res.send('Crawled all chains.');
   } catch (error) {
-    res.status(500).send(`Error crawling all chains: ${(error as Error).message}`);
+    res.status (500).send(`Error crawling all chains: ${(error as Error).message}`);
   }
 });
 
@@ -243,3 +264,4 @@ app.listen(PORT, () => {
   logger.info(`Load balancer running at http://localhost:${PORT}`);
   setInterval(checkAndUpdateChains, config.chains.checkInterval);
 });
+
