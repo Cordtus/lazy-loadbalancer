@@ -1,16 +1,17 @@
 import express, { Request, Response } from 'express';
-import { crawlNetwork, updateChains } from './crawler.js';
+import { crawlNetwork, startCrawling } from './crawler.js';
 import { ChainEntry } from './types.js';
 import { fetchChainData, checkAndUpdateChains, fetchChains } from './fetchChains.js';
-import { ensureFilesExist, loadChainsData, saveChainsData, logToFile } from './utils.js';
+import { ensureFilesExist, loadChainsData, saveChainsData } from './utils.js';
 import fetch from 'node-fetch';
+import logger from './logger.js';
+import config from './config.js';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = config.port;
 
 ensureFilesExist();
 
-const logModuleName = 'balancer';
 let chainsData: Record<string, ChainEntry> = loadChainsData();
 
 async function updateChainData(chainName: string): Promise<void> {
@@ -20,14 +21,10 @@ async function updateChainData(chainName: string): Promise<void> {
       chainsData[chainName] = chainData;
       saveChainsData(chainsData);
 
-      const initialRpcUrl = `${chainsData[chainName]['rpc-addresses'][0].replace(/\/$/, '')}/net_info`;
-      console.log(`Starting network crawl from: ${initialRpcUrl}`);
-      logToFile(logModuleName, `Starting network crawl from: ${initialRpcUrl}`);
-      await crawlNetwork(chainName, initialRpcUrl, 3, 0);
+      await crawlNetwork(chainName, chainsData[chainName]['rpc-addresses']);
     }
   } catch (error) {
-    console.error('Error updating chain data:', error);
-    logToFile(logModuleName, `Error updating chain data: ${error}`);
+    logger.error('Error updating chain data:', error);
   }
 }
 
@@ -35,26 +32,20 @@ async function updateEndpointData(chainName: string): Promise<void> {
   try {
     const chainEntry = chainsData[chainName];
     if (!chainEntry) {
-      console.error(`Chain ${chainName} does not exist.`);
-      logToFile(logModuleName, `Chain ${chainName} does not exist.`);
+      logger.error(`Chain ${chainName} does not exist.`);
       return;
     }
 
-    const initialRpcUrl = `${chainsData[chainName]['rpc-addresses'][0].replace(/\/$/, '')}/net_info`;
-    console.log(`Starting endpoint update from: ${initialRpcUrl}`);
-    logToFile(logModuleName, `Starting endpoint update from: ${initialRpcUrl}`);
-    await crawlNetwork(chainName, initialRpcUrl, 3, 0);
+    await crawlNetwork(chainName, chainEntry['rpc-addresses']);
   } catch (error) {
-    console.error('Error updating endpoint data:', error);
-    logToFile(logModuleName, `Error updating endpoint data: ${error}`);
+    logger.error('Error updating endpoint data:', error);
   }
 }
 
 async function speedTest(chainName: string): Promise<void> {
   const chainEntry = chainsData[chainName];
   if (!chainEntry) {
-    console.error(`Chain ${chainName} does not exist.`);
-    logToFile(logModuleName, `Chain ${chainName} does not exist.`);
+    logger.error(`Chain ${chainName} does not exist.`);
     return;
   }
 
@@ -77,8 +68,7 @@ async function speedTest(chainName: string): Promise<void> {
         results.push(endTime - startTime);
       }
     } catch (error) {
-      console.error(`Error testing ${rpcAddress}:`, error);
-      logToFile(logModuleName, `Error testing ${rpcAddress}: ${error}`);
+      logger.error(`Error testing ${rpcAddress}:`, error);
       exclusionList.add(rpcAddress);
     }
   }
@@ -87,12 +77,9 @@ async function speedTest(chainName: string): Promise<void> {
   const totalTime = results.reduce((acc, curr) => acc + curr, 0);
   const avgTimePerRequest = totalTime / totalRequests;
 
-  console.log(`Total requests: ${totalRequests}`);
-  console.log(`Average time per request: ${avgTimePerRequest} ms`);
-  console.log(`Requests per second: ${1000 / avgTimePerRequest}`);
-  logToFile(logModuleName, `Total requests: ${totalRequests}`);
-  logToFile(logModuleName, `Average time per request: ${avgTimePerRequest} ms`);
-  logToFile(logModuleName, `Requests per second: ${1000 / avgTimePerRequest}`);
+  logger.info(`Total requests: ${totalRequests}`);
+  logger.info(`Average time per request: ${avgTimePerRequest} ms`);
+  logger.info(`Requests per second: ${1000 / avgTimePerRequest}`);
 }
 
 async function proxyRequest(chain: string, endpoint: string, res: Response): Promise<void> {
@@ -108,23 +95,20 @@ async function proxyRequest(chain: string, endpoint: string, res: Response): Pro
   while (!successfulResponse && currentIndex < rpcAddresses.length) {
     const rpcAddress = rpcAddresses[currentIndex].replace(/\/$/, '');
     const url = `${rpcAddress}/${endpoint}`;
-    console.log(`Proxying request to: ${url}`);
-    logToFile(logModuleName, `Proxying request to: ${url}`);
+    logger.info(`Proxying request to: ${url}`);
     try {
       const response = await fetch(url);
       const data = await response.json();
       res.json(data);
       successfulResponse = true;
     } catch (error) {
-      console.error(`Error proxying request to ${url}:`, error);
-      logToFile(logModuleName, `Error proxying request to ${url}: ${error}`);
+      logger.error(`Error proxying request to ${url}:`, error);
       currentIndex++;
     }
   }
 
   if (!successfulResponse) {
     res.status(500).send('Error proxying request.');
-    logToFile(logModuleName, 'Error proxying request.');
   }
 }
 
@@ -160,7 +144,12 @@ app.post('/update-endpoint-data', async (req: Request, res: Response) => {
   }
 
   await updateEndpointData(chainName);
-  res.send(`Endpoint data for ${chainName} updated.`);
+  if (chainsData[chainName]) {
+    await crawlNetwork(chainName, chainsData[chainName]['rpc-addresses']);
+  } else {
+    logger.error(`Chain data for ${chainName} not found after updating endpoints.`);
+  }
+  res.send(`Endpoint data for ${chainName} updated and crawled.`);
 });
 
 app.get('/speed-test/:chainName', async (req: Request, res: Response) => {
@@ -174,8 +163,7 @@ app.get('/rpc-lb/:chain/*', async (req: Request, res: Response) => {
   const endpoint = req.url.split(`${chain}/`)[1];
 
   if (!chainsData[chain]) {
-    console.log(`Chain data for ${chain} not found, updating...`);
-    logToFile(logModuleName, `Chain data for ${chain} not found, updating...`);
+    logger.info(`Chain data for ${chain} not found, updating...`);
     await updateChainData(chain);
   }
 
@@ -198,16 +186,7 @@ app.post('/:chain/update-chain', async (req: Request, res: Response) => {
 });
 
 app.post('/crawl-all-chains', async (req: Request, res: Response) => {
-  const chainsData: { [key: string]: ChainEntry } = loadChainsData();
-  const maxDepth = 3;
-
-  for (const chainName of Object.keys(chainsData)) {
-    const initialRPCs = chainsData[chainName]['rpc-addresses'];
-    for (const rpc of initialRPCs) {
-      await crawlNetwork(chainName, `${rpc}/net_info`, maxDepth);
-    }
-  }
-
+  await startCrawling();
   res.send('Crawled all chains.');
 });
 
@@ -218,13 +197,11 @@ app.post('/:chain/crawl-chain', async (req: Request, res: Response) => {
     return res.status(400).send(`Chain ${chain} not found.`);
   }
 
-  const initialRpcUrl = `${chainEntry['rpc-addresses'][0]}/net_info`;
-  await crawlNetwork(chain, initialRpcUrl, 3, 0);
+  await crawlNetwork(chain, chainEntry['rpc-addresses']);
   res.send(`Crawled chain ${chain}.`);
 });
 
 app.listen(PORT, () => {
-  console.log(`Load balancer running at http://localhost:${PORT}`);
-  logToFile(logModuleName, `Load balancer running at http://localhost:${PORT}`);
-  setInterval(checkAndUpdateChains, 24 * 60 * 60 * 1000); // Periodic update every 24 hours
+  logger.info(`Load balancer running at http://localhost:${PORT}`);
+  setInterval(checkAndUpdateChains, config.chains.checkInterval);
 });

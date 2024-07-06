@@ -1,243 +1,164 @@
-import fetch, { RequestInit } from 'node-fetch';
-import { Octokit } from "@octokit/core";
-import dotenv from "dotenv";
-import { ChainEntry, NetInfo, StatusInfo } from './types.js';
-import { ensureFilesExist, loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, logToFile, getDirName, loadGoodIPs, saveGoodIPs } from './utils.js';
-import path from 'path';
-import fs from 'fs';
+import fetch, { Response as FetchResponse } from 'node-fetch';
+import { ChainEntry, NetInfo, StatusInfo, Peer } from './types';
+import { loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, loadGoodIPs, saveGoodIPs } from './utils.js';
+import config from './config.js';
+import dns from 'dns';
+import { promisify } from 'util';
+import logger from './logger.js';
 
-dotenv.config();
-
-const octokit = new Octokit({
-  auth: process.env.GITHUB_PAT,
-});
-
-ensureFilesExist();
-
-const REPO_OWNER = "cosmos";
-const REPO_NAME = "chain-registry";
+const ping = promisify(dns.lookup);
 
 const visitedNodes = new Set<string>();
 const rejectedIPs = loadRejectedIPs();
 const goodIPs = loadGoodIPs();
-const timeout = 3000; // Timeout for requests in milliseconds
-const logModuleName = 'crawler';
 
-interface JsonRpcResponse<T> {
-  jsonrpc: string;
-  id: number;
-  result: T;
+const COMMON_PORTS = [443, 26657, 36657, 46657, 56657];
+
+interface PeerInfo {
+  id: string;
+  moniker: string;
+  ips: string[];
 }
 
-async function fetchNetInfo(url: string): Promise<NetInfo | null> {
-  logToFile(logModuleName, `Fetching ${url}`);
+async function fetchWithTimeout(url: string): Promise<FetchResponse> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.crawler.timeout);
+
   try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    const response = await fetch(url, { signal: controller.signal } as RequestInit);
-    clearTimeout(id);
-    const data = (await response.json()) as JsonRpcResponse<NetInfo>;
-    logToFile(logModuleName, `Fetched ${url} successfully`);
-    return data.result;
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    return response;
   } catch (error) {
-    const err = error as Error;
-    console.error(`Error fetching ${url}:`, err.message);
-    logToFile(logModuleName, `Error fetching ${url}: ${err.message}`);
-    return null;
+    clearTimeout(timeout);
+    throw error;
   }
 }
 
-async function fetchStatus(url: string): Promise<StatusInfo | null> {
-  logToFile(logModuleName, `Fetching ${url}`);
-  try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    const response = await fetch(url, { signal: controller.signal } as RequestInit);
-    clearTimeout(id);
-    const data = (await response.json()) as JsonRpcResponse<StatusInfo>;
-    logToFile(logModuleName, `Fetched ${url} successfully`);
-    return data.result;
-  } catch (error) {
-    const err = error as Error;
-    console.error(`Error fetching ${url}:`, err.message);
-    logToFile(logModuleName, `Error fetching ${url}: ${err.message}`);
-    return null;
-  }
+function normalizeUrl(url: string): string {
+  return url.replace(/^(https?:\/\/)?(.*?)(:\d+)?\/?$/, '$2');
 }
 
-async function validateEndpoint(url: string): Promise<boolean> {
-  logToFile(logModuleName, `Validating endpoint: ${url}`);
+async function isValidIp(ip: string): Promise<boolean> {
   try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    const response = await fetch(url, { signal: controller.signal } as RequestInit);
-    clearTimeout(id);
-    logToFile(logModuleName, `Validation response from ${url}: ${response.status} ${response.statusText}`);
-    const data = (await response.json()) as JsonRpcResponse<StatusInfo>;
-    return response.ok && data.result.node_info.other.tx_index === 'on';
-  } catch (error) {
-    const err = error as Error;
-    console.error(`Error validating endpoint ${url}:`, err.message);
-    logToFile(logModuleName, `Error validating endpoint ${url}: ${err.message}`);
+    await ping(ip);
+    return true;
+  } catch {
     return false;
   }
 }
 
-async function crawlNetwork(chainName: string, url: string, maxDepth: number, currentDepth = 0): Promise<void> {
-  if (currentDepth > maxDepth) {
-    logToFile(logModuleName, `Reached max depth: ${maxDepth} for ${url}`);
-    return;
-  }
-
-  let hostname;
+async function fetchNetInfo(url: string): Promise<NetInfo | null> {
   try {
-    hostname = new URL(url).hostname;
+    const response = await fetchWithTimeout(`${url}/net_info`);
+    if (!response.ok) return null;
+    const data = await response.json() as { result: NetInfo };
+    return data.result;
   } catch (error) {
-    const err = error as Error;
-    console.error(`Invalid URL: ${url}`, err.message);
-    logToFile(logModuleName, `Invalid URL: ${url} - ${err.message}`);
-    return;
+    logger.error(`Error fetching net_info from ${url}:`, error);
+    return null;
   }
+}
 
-  if (rejectedIPs.has(hostname) || ['0.0.0.0', '127.0.0.1'].includes(hostname)) {
-    logToFile(logModuleName, `Skipping rejected or local IP: ${url}`);
-    return;
-  }
- 
-  if (goodIPs[hostname] && Date.now() - goodIPs[hostname] < 24 * 60 * 60 * 1000) {
-    logToFile(logModuleName, `Skipping recently crawled good IP: ${url}`);
-    return;
-  }
+function extractPeerInfo(peers: Peer[]): PeerInfo[] {
+  return peers.map(peer => ({
+    id: peer.node_info.id,
+    moniker: peer.node_info.moniker,
+    ips: [
+      normalizeUrl(peer.node_info.listen_addr),
+      normalizeUrl(peer.remote_ip),
+      normalizeUrl(peer.node_info.other.rpc_address)
+    ].filter(ip => 
+      ip && 
+      ip !== '127.0.0.1' && 
+      ip !== '0.0.0.0' && 
+      !ip.includes(':') // Exclude IPv6
+    )
+  })).filter(peer => peer.ips.length > 0);
+}
 
-  const netInfo = await fetchNetInfo(url);
-  if (!netInfo) {
-    logToFile(logModuleName, `No net info available for: ${url}`);
-    return;
+async function checkEndpoint(url: string): Promise<boolean> {
+  try {
+    const response = await fetchWithTimeout(`${url}/status`);
+    if (!response.ok) return false;
+    const data = await response.json() as { result: { node_info: { other: { tx_index: string } } } };
+    return data.result.node_info.other.tx_index === 'on';
+  } catch {
+    return false;
   }
+}
 
-  const statusUrl = url.replace('/net_info', '/status');
-  const statusInfo = await fetchStatus(statusUrl);
-  if (statusInfo) {
-    const latestBlockHeight = statusInfo.sync_info.latest_block_height;
-    const latestBlockTime = statusInfo.sync_info.latest_block_time;
-    console.log(`Node: ${url}`);
-    console.log(`Latest Block Height: ${latestBlockHeight}`);
-    console.log(`Latest Block Time: ${latestBlockTime}`);
-    logToFile(logModuleName, `Node: ${url}`);
-    logToFile(logModuleName, `Latest Block Height: ${latestBlockHeight}`);
-    logToFile(logModuleName, `Latest Block Time: ${latestBlockTime}`);
-  }
-
-  const peers = netInfo.peers;
+async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promise<void> {
   const chainsData = loadChainsData();
-  const crawlPromises = peers.map(async (peer) => {
-    const remoteIp = peer.remote_ip;
+  let toCheck: PeerInfo[] = [];
+  const checked = new Set<string>();
 
-    let rpcAddress = peer.node_info.other.rpc_address.replace('tcp://', 'http://').replace('0.0.0.0', remoteIp).replace('127.0.0.1', remoteIp);
-    rpcAddress = rpcAddress.split(':')[0]; // Remove any port if exists
-    rpcAddress = `${rpcAddress}:26657`; // Always use the correct port
-
-    // Ensure the URL is valid
-    try {
-      new URL(rpcAddress);
-    } catch (error) {
-      const err = error as Error;
-      console.error(`Invalid RPC address: ${rpcAddress}`, err.message);
-      logToFile(logModuleName, `Invalid RPC address: ${rpcAddress} - ${err.message}`);
-      return;
+  // Initial population of toCheck
+  for (const url of initialRpcUrls) {
+    const netInfo = await fetchNetInfo(url);
+    if (netInfo) {
+      toCheck.push(...extractPeerInfo(netInfo.peers));
     }
-
-    if (rejectedIPs.has(new URL(rpcAddress).hostname) || visitedNodes.has(rpcAddress)) {
-      logToFile(logModuleName, `Skipping already visited or rejected IP: ${rpcAddress}`);
-      return;
-    }
-
-    visitedNodes.add(rpcAddress);
-    console.log(`Crawling: ${rpcAddress}`);
-    logToFile(logModuleName, `Crawling: ${rpcAddress}`);
-
-    if (await validateEndpoint(`${rpcAddress}/status`)) {
-      if (!chainsData[chainName]['rpc-addresses'].includes(rpcAddress)) {
-        chainsData[chainName]['rpc-addresses'].push(rpcAddress);
-        saveChainsData(chainsData);
-        goodIPs[hostname] = Date.now();
-        saveGoodIPs(goodIPs);
-        console.log(`Added new RPC endpoint: ${rpcAddress}`);
-        logToFile(logModuleName, `Added new RPC endpoint: ${rpcAddress}`);
-      }
-    } else {
-      logToFile(logModuleName, `Rejected invalid RPC endpoint: ${rpcAddress}`);
-      rejectedIPs.add(new URL(rpcAddress).hostname);
-      saveRejectedIPs(rejectedIPs);
-    }
-
-    await crawlNetwork(chainName, `${rpcAddress}/net_info`, maxDepth, currentDepth + 1);
-  });
-
-  await Promise.all(crawlPromises);
-}
-
-async function fetchRPCAddresses(chainName: string): Promise<string[]> {
-  try {
-    console.log(`Fetching RPC addresses for: ${chainName}`);
-    logToFile(logModuleName, `Fetching RPC addresses for: ${chainName}`);
-    const response = await octokit.request(
-      `GET /repos/{owner}/{repo}/contents/{path}`,
-      {
-        owner: REPO_OWNER,
-        repo: REPO_NAME,
-        path: `${chainName}/chain.json`,
-      }
-    );
-    console.log(`Response from GitHub for ${chainName}: ${response.status}`);
-    logToFile(logModuleName, `Response from GitHub for ${chainName}: ${response.status}`);
-
-    if (Array.isArray(response.data)) {
-      return [];
-    }
-
-    const fileData = response.data as { content?: string };
-    if (fileData.content) {
-      const content = Buffer.from(fileData.content, "base64").toString();
-      const chainData = JSON.parse(content);
-      return chainData.apis?.rpc?.map((rpc: { address: string }) => rpc.address) || [];
-    }
-  } catch (error) {
-    const err = error as Error;
-    console.error(`Error fetching RPC addresses for ${chainName}:`, err.message);
-    logToFile(logModuleName, `Error fetching RPC addresses for ${chainName}: ${err.message}`);
   }
-  return [];
-}
 
-async function updateChains() {
-  const chainsData: { [key: string]: ChainEntry } = loadChainsData();
+  for (let round = 0; round < 5; round++) {
+    logger.info(`Starting round ${round + 1} of crawling for ${chainName}`);
+    const newPeers: PeerInfo[] = [];
 
-  for (const chainName of Object.keys(chainsData)) {
-    const rpcAddresses = await fetchRPCAddresses(chainName);
-    chainsData[chainName]['rpc-addresses'] = rpcAddresses;
-    console.log(`${chainName}: ${rpcAddresses.length} RPC addresses found.`);
-    logToFile(logModuleName, `${chainName}: ${rpcAddresses.length} RPC addresses found.`);
+    // Batch IP validation
+    const validIps = (await Promise.all(
+      toCheck.flatMap(peer => peer.ips.map(async ip => ({ ip, valid: await isValidIp(ip) })))
+    )).filter(result => result.valid).map(result => result.ip);
+
+    // Batch port checking
+    for (const port of COMMON_PORTS) {
+      const batchResults = await Promise.all(
+        validIps.map(async ip => {
+          const url = `http${port === 443 ? 's' : ''}://${ip}:${port}`;
+          if (checked.has(url)) return null;
+          checked.add(url);
+          
+          const isValid = await checkEndpoint(url);
+          if (isValid) {
+            if (!chainsData[chainName]['rpc-addresses'].includes(url)) {
+              chainsData[chainName]['rpc-addresses'].push(url);
+              goodIPs[ip] = Date.now();
+              logger.info(`Added new RPC endpoint: ${url}`);
+            }
+            const netInfo = await fetchNetInfo(url);
+            if (netInfo) {
+              newPeers.push(...extractPeerInfo(netInfo.peers));
+            }
+            return url;
+          }
+          return null;
+        })
+      );
+
+      // Update chainsData and goodIPs
+      batchResults.filter(Boolean).forEach(url => {
+        if (url && !chainsData[chainName]['rpc-addresses'].includes(url)) {
+          chainsData[chainName]['rpc-addresses'].push(url);
+          const ip = normalizeUrl(url);
+          goodIPs[ip] = Date.now();
+        }
+      });
+    }
+
+    // Prepare for next round
+    toCheck = newPeers.filter(peer => !checked.has(peer.id));
+    if (toCheck.length === 0) break;
   }
 
   saveChainsData(chainsData);
-  console.log("Chains data updated with RPC addresses.");
-  logToFile(logModuleName, "Chains data updated with RPC addresses.");
+  saveGoodIPs(goodIPs);
+  saveRejectedIPs(rejectedIPs);
 }
 
-// Entry point to start crawling
-(async () => {
-  await updateChains();
-
-  const chainsData: { [key: string]: ChainEntry } = loadChainsData();
-  const maxDepth = 3;
-
-  for (const chainName of Object.keys(chainsData)) {
-    const initialRPCs = chainsData[chainName]['rpc-addresses'];
-    for (const rpc of initialRPCs) {
-      await crawlNetwork(chainName, `${rpc}/net_info`, maxDepth);
-    }
+async function startCrawling(): Promise<void> {
+  const chainsData = loadChainsData();
+  for (const [chainName, chainData] of Object.entries(chainsData)) {
+    await crawlNetwork(chainName, chainData['rpc-addresses']);
   }
-})();
+}
 
-export { crawlNetwork, fetchNetInfo, updateChains };
+export { crawlNetwork, startCrawling };

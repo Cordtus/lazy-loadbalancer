@@ -6,20 +6,26 @@ export interface ChainEntry {
   'rpc-addresses': string[];
   timeout: string;
   apis?: {
-    rpc: Array<{ address: string }>;
+    rpc: Array<Api>;
+    rest: Array<Api>;
   };
   timestamp?: number;
 }
 
 export interface NetInfo {
-  peers: Array<{
-    remote_ip: string;
-    node_info: {
-      other: {
-        rpc_address: string;
-      };
+  peers: Array<Peer>;
+}
+
+export interface Peer {
+  remote_ip: string;
+  node_info: {
+    id: string;
+    moniker: string;
+    listen_addr: string;
+    other: {
+      rpc_address: string;
     };
-  }>;
+  };
 }
 
 export interface StatusInfo {
@@ -47,4 +53,9 @@ export interface ChainData {
     rpc: Api[];
     rest: Api[];
   };
+}
+
+export interface ErrorResponse {
+  message: string;
+  stack?: string;
 }
