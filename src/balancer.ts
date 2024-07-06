@@ -18,10 +18,19 @@ async function updateChainData(chainName: string): Promise<void> {
   try {
     const chainData = await fetchChainData(chainName);
     if (chainData) {
-      chainsData[chainName] = chainData;
-      saveChainsData(chainsData);
+      const currentChainsData = loadChainsData();
+      currentChainsData[chainName] = {
+        ...currentChainsData[chainName],
+        ...chainData,
+        'rpc-addresses': [...new Set([
+          ...(currentChainsData[chainName]?.['rpc-addresses'] || []),
+          ...chainData['rpc-addresses']
+        ])],
+        lastUpdated: new Date().toISOString()
+      };
+      saveChainsData(currentChainsData);
 
-      await crawlNetwork(chainName, chainsData[chainName]['rpc-addresses']);
+      await crawlNetwork(chainName, currentChainsData[chainName]['rpc-addresses']);
     }
   } catch (error) {
     logger.error('Error updating chain data:', error);
@@ -199,6 +208,11 @@ app.post('/:chain/crawl-chain', async (req: Request, res: Response) => {
 
   await crawlNetwork(chain, chainEntry['rpc-addresses']);
   res.send(`Crawled chain ${chain}.`);
+});
+
+app.get('/view-chains-data', (req, res) => {
+  const chainsData = loadChainsData();
+  res.json(chainsData);
 });
 
 app.listen(PORT, () => {
