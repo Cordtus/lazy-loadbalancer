@@ -1,9 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
-import logger from '../src/logger';
+import { appLogger } from '../src/logger';
 
 export function errorHandler(err: Error, req: Request, res: Response, next: NextFunction) {
   const statusCode = res.statusCode !== 200 ? res.statusCode : 500;
-  logger.error(`Error: ${err.message}`, { 
+  appLogger.error(`Error: ${err.message}`, { 
     stack: err.stack,
     method: req.method,
     url: req.url,
