@@ -4,7 +4,7 @@ dotenv.config();
 
 export default {
   port: process.env.PORT || 3000,
-  requestTimeout: 5000, // milliseconds
+  requestTimeout: 5000,
   github: {
     pat: process.env.GITHUB_PAT,
     owner: 'cosmos',
@@ -15,13 +15,13 @@ export default {
     checkInterval: 24 * 60 * 60 * 1000, // 24 hours
   },
   crawler: {
-    timeout: 3000,
+    timeout: 5000, // increased to 5 seconds
     maxDepth: 3,
     recheckInterval: 24 * 60 * 60 * 1000, // 24 hours
   },
   logging: {
     balancer: process.env.LOG_LEVEL_BALANCER || 'info',
     crawler: process.env.LOG_LEVEL_CRAWLER || 'info',
-    app: process.env.LOG_LEVEL_APP || 'warn',
+    app: process.env.LOG_LEVEL_APP || 'info',
   }
 };

@@ -4,6 +4,7 @@ import { balancerLogger as logger } from './logger.js';
 import config from './config.js';
 import { ChainEntry } from './types.js';
 import https from 'https';
+import http from 'http';
 import fetch, { RequestInit } from 'node-fetch';
 import apiRouter from './api.js';
 
@@ -12,10 +13,11 @@ const PORT = config.port;
 
 const chainsData: Record<string, ChainEntry> = loadChainsData();
 const rpcIndexMap: Record<string, number> = {};
-
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
 });
+
+const httpAgent = new http.Agent();
 
 function selectNextRPC(chain: string): string {
   const rpcAddresses = chainsData[chain]?.['rpc-addresses'];
@@ -55,7 +57,7 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
         },
         body: JSON.stringify(req.body),
         signal: AbortSignal.timeout(config.requestTimeout),
-        agent: httpsAgent,
+        agent: url.protocol === 'https:' ? httpsAgent : httpAgent,
       };
 
       const startTime = Date.now();
@@ -67,6 +69,15 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
       if (response.ok) {
         const responseText = await response.text();
         logger.debug(`Response body: ${responseText.substring(0, 200)}...`);
+
+        // Check if the response is valid JSON
+        try {
+          JSON.parse(responseText);
+        } catch (error) {
+          logger.error(`Invalid JSON response from ${url.href}`);
+          attempts++;
+          continue;
+        }
 
         // Set safe headers
         for (const [key, value] of response.headers.entries()) {
