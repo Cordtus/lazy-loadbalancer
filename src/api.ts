@@ -66,24 +66,6 @@ router.post('/crawl-all-chains', async (req: Request, res: Response) => {
   }
 });
 
-// Get endpoints for a specific chain
-router.get('/chain-endpoints/:chainName', (req: Request, res: Response) => {
-  const { chainName } = req.params;
-  const chainsData = loadChainsData();
-  const chainData = chainsData[chainName];
-  if (chainData) {
-    res.json(chainData['rpc-addresses']);
-  } else {
-    res.status(404).send(`Chain ${chainName} not found.`);
-  }
-});
-
-// Get total number of chains
-router.get('/total-chains', (req: Request, res: Response) => {
-  const chainsData = loadChainsData();
-  res.json({ totalChains: Object.keys(chainsData).length });
-});
-
 // Get list of all chain names
 router.get('/chain-list', (req: Request, res: Response) => {
   const chainsData = loadChainsData();
@@ -98,6 +80,22 @@ router.get('/chains-summary', (req: Request, res: Response) => {
     endpointCount: data['rpc-addresses'].length
   }));
   res.json(summary);
+});
+
+// In api.ts
+router.get('/rpc-list/:chainName', (req: Request, res: Response) => {
+  const { chainName } = req.params;
+  const chainsData = loadChainsData();
+  const chainData = chainsData[chainName];
+  if (chainData) {
+    res.json({
+      chainName,
+      rpcCount: chainData['rpc-addresses'].length,
+      rpcList: chainData['rpc-addresses']
+    });
+  } else {
+    res.status(404).send(`Chain ${chainName} not found.`);
+  }
 });
 
 export default router;

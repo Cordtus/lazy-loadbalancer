@@ -1,5 +1,6 @@
+import { differenceInSeconds, parseISO } from 'date-fns';
 import fetch, { Response as FetchResponse } from 'node-fetch';
-import { ChainEntry, NetInfo, StatusInfo, Peer } from './types';
+import { ChainEntry, NetInfo, StatusInfo, StatusResponse, Peer } from './types';
 import { loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, loadGoodIPs, saveGoodIPs, loadBlacklistedIPs } from './utils.js';
 import config from './config.js';
 import dns from 'dns';
@@ -12,7 +13,7 @@ const visitedNodes = new Set<string>();
 let rejectedIPs = loadRejectedIPs();
 let goodIPs = loadGoodIPs();
 
-const COMMON_PORTS = [443, 26657, 36657, 46657, 56657];
+const COMMON_PORTS = [443, 2401, 10157, 15957, 14657, 22257, 26657, 26667, 27957, 31657, 33657, 36657, 37657, 46657, 53657, 56657, 58657];
 
 interface PeerInfo {
   id: string;
@@ -81,20 +82,37 @@ function extractPeerInfo(peers: Peer[]): PeerInfo[] {
   })).filter(peer => peer.ips.length > 0);
 }
 
-async function checkEndpoint(url: string): Promise<boolean> {
+async function checkEndpoint(url: string, expectedChainId: string): Promise<{ isValid: boolean; actualChainId: string | null }> {
   try {
     const response = await fetchWithTimeout(`${url}/status`);
-    if (!response.ok) return false;
-    const data = await response.json() as { result: { node_info: { other: { tx_index: string } } } };
-    return data.result.node_info.other.tx_index === 'on';
+    if (!response.ok) return { isValid: false, actualChainId: null };
+    
+    const data = await response.json() as StatusResponse;
+    const { result } = data;
+
+    // Check if the RPC belongs to the expected network
+    const actualChainId = result.node_info.network;
+    
+    // Check if the latest block time is within 1 minute of current time
+    const latestBlockTime = parseISO(result.sync_info.latest_block_time);
+    const currentTime = new Date();
+    const timeDifference = Math.abs(differenceInSeconds(latestBlockTime, currentTime));
+
+    const isHealthy = timeDifference <= 60; // 60 seconds = 1 minute
+
+    return { 
+      isValid: isHealthy && actualChainId === expectedChainId,
+      actualChainId
+    };
   } catch {
-    return false;
+    return { isValid: false, actualChainId: null };
   }
 }
 
 async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promise<{
   newEndpoints: number,
-  totalEndpoints: number
+  totalEndpoints: number,
+  misplacedEndpoints: number
 }> {
   let chainsData = loadChainsData();
   let toCheck: PeerInfo[] = [];
@@ -102,8 +120,12 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
   const blacklistedIPs = new Set(loadBlacklistedIPs());
 
   let newEndpointsCount = 0;
+  let misplacedEndpointsCount = 0;
+
+  const expectedChainId = chainsData[chainName]['chain-id'];
 
   logger.info(`Starting crawl for chain ${chainName} with ${initialRpcUrls.length} initial RPC URLs`);
+
 
   // Initial population of toCheck
   for (const url of initialRpcUrls) {
@@ -124,7 +146,11 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
 
   if (toCheck.length === 0) {
     logger.warn(`No peers found for chain ${chainName}. Skipping crawl.`);
-    return { newEndpoints: 0, totalEndpoints: initialRpcUrls.length };
+    return { 
+      newEndpoints: 0, 
+      totalEndpoints: initialRpcUrls.length,
+      misplacedEndpoints: 0
+    };
   }
 
   for (let round = 0; round < 5; round++) {
@@ -147,7 +173,7 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
           if (checked.has(url)) return null;
           checked.add(url);
           
-          const isValid = await checkEndpoint(url);
+          const { isValid, actualChainId } = await checkEndpoint(url, expectedChainId);
           if (isValid) {
             logger.info(`Valid endpoint found: ${url}`);
             if (!chainsData[chainName]['rpc-addresses'].includes(url)) {
@@ -163,6 +189,15 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
               toCheck.push(...peers);
             }
             return url;
+          } else if (actualChainId && actualChainId !== expectedChainId) {
+            // Handle misplaced endpoint
+            logger.warn(`Misplaced endpoint found: ${url} belongs to ${actualChainId}, not ${chainName}`);
+            if (chainsData[actualChainId] && !chainsData[actualChainId]['rpc-addresses'].includes(url)) {
+              chainsData[actualChainId]['rpc-addresses'].push(url);
+              goodIPs[ip] = Date.now();
+              logger.info(`Added misplaced RPC endpoint: ${url} to ${actualChainId}`);
+              misplacedEndpointsCount++;
+            }
           }
           return null;
         })
@@ -196,16 +231,17 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
 
   return {
     newEndpoints: newEndpointsCount,
-    totalEndpoints: chainsData[chainName]['rpc-addresses'].length
+    totalEndpoints: chainsData[chainName]['rpc-addresses'].length,
+    misplacedEndpoints: misplacedEndpointsCount
   };
 }
 
-async function startCrawling(): Promise<Record<string, { newEndpoints: number, totalEndpoints: number }>> {
+async function startCrawling(): Promise<Record<string, { newEndpoints: number, totalEndpoints: number, misplacedEndpoints: number }>> {
   const chainsData = loadChainsData();
   const totalChains = Object.keys(chainsData).length;
   logger.info(`Starting to crawl all chains. Total chains: ${totalChains}`);
 
-  const results: Record<string, { newEndpoints: number, totalEndpoints: number }> = {};
+  const results: Record<string, { newEndpoints: number, totalEndpoints: number, misplacedEndpoints: number }> = {};
 
   for (const [index, [chainName, chainData]] of Object.entries(chainsData).entries()) {
     logger.info(`Crawling chain ${index + 1}/${totalChains}: ${chainName}`);
