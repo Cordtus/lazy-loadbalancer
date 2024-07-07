@@ -2,8 +2,6 @@ import express, { Request, Response } from 'express';
 import { crawlNetwork, startCrawling } from './crawler.js';
 import { fetchChainData, fetchChains } from './fetchChains.js';
 import { loadChainsData, saveChainsData } from './utils.js';
-import { balancerLogger as logger } from './logger.js';
-import { refreshChainsData } from './balancer.js';
 
 const router = express.Router();
 
@@ -46,10 +44,6 @@ router.post('/crawl-chain/:chainName', async (req: Request, res: Response) => {
       return res.status(404).send(`Chain ${chainName} not found.`);
     }
     const result = await crawlNetwork(chainName, chainEntry['rpc-addresses']);
-    
-    // Refresh chains data after crawl
-    refreshChainsData();
-    
     res.json({
       message: `Crawled chain ${chainName}.`,
       result
@@ -63,10 +57,6 @@ router.post('/crawl-chain/:chainName', async (req: Request, res: Response) => {
 router.post('/crawl-all-chains', async (req: Request, res: Response) => {
   try {
     const results = await startCrawling();
-    
-    // Refresh chains data after crawl
-    refreshChainsData();
-    
     res.json({
       message: 'Crawled all chains.',
       results

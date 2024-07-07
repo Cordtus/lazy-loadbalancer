@@ -13,7 +13,7 @@ const PORT = config.port;
 
 ensureFilesExist();
 
-let chainsData: Record<string, ChainEntry> = loadChainsData();
+const chainsData: Record<string, ChainEntry> = loadChainsData();
 const rpcIndexMap: Record<string, number> = {};
 let blacklistedIPs: Record<string, number> = {};
 
@@ -45,45 +45,26 @@ function logRPCPerformance() {
 
 setInterval(logRPCPerformance, 60000); // Log performance every minute
 
-// Add the refreshChainsData function
-function refreshChainsData() {
-  chainsData = loadChainsData();
-  logger.info('Chains data refreshed');
-}
-
-// Improved RPC selection logic
-function selectBestRPC(chain: string): string {
+function selectNextRPC(chain: string): string {
   const rpcAddresses = chainsData[chain]?.['rpc-addresses'];
   if (!rpcAddresses || rpcAddresses.length === 0) {
     throw new Error('No RPC addresses available for the specified chain.');
   }
 
-  const now = Date.now();
-  let bestRPC = rpcAddresses[0];
-  let bestScore = -Infinity;
-
-  for (const rpc of rpcAddresses) {
-    const performance = rpcPerformance[rpc] || { totalTime: 0, requests: 1, lastUsed: 0 };
-    const avgResponseTime = performance.totalTime / performance.requests;
-    const timeSinceLastUse = now - performance.lastUsed;
-    
-    // Score based on average response time and time since last use
-    const score = (1 / avgResponseTime) * timeSinceLastUse;
-    
-    if (score > bestScore) {
-      bestScore = score;
-      bestRPC = rpc;
-    }
+  if (!(chain in rpcIndexMap)) {
+    rpcIndexMap[chain] = 0;
   }
 
-  return bestRPC;
+  const index = rpcIndexMap[chain];
+  rpcIndexMap[chain] = (index + 1) % rpcAddresses.length;
+
+  return rpcAddresses[index];
 }
 
 async function proxyRequest(chain: string, endpoint: string, req: Request, res: Response): Promise<void> {
-  const rpcAddress = selectBestRPC(chain);
+  const rpcAddress = selectNextRPC(chain);
   const url = new URL(rpcAddress);
   
-  // Only append the endpoint if it's not empty
   if (endpoint) {
     url.pathname = url.pathname.replace(/\/$/, '') + '/' + endpoint.replace(/^\//, '');
   }
@@ -196,4 +177,3 @@ app.listen(PORT, () => {
   logger.info(`Load balancer running at http://localhost:${PORT}`);
 });
 
-export { refreshChainsData };
