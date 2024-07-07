@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express';
-import { crawlNetwork, startCrawling } from './crawler.js';
+import { crawlNetwork, crawlAllChains } from './crawler.js';
 import { fetchChainData, fetchChains } from './fetchChains.js';
 import { loadChainsData, saveChainsData } from './utils.js';
 
@@ -56,7 +56,7 @@ router.post('/crawl-chain/:chainName', async (req: Request, res: Response) => {
 // Crawl all chains
 router.post('/crawl-all-chains', async (req: Request, res: Response) => {
   try {
-    const results = await startCrawling();
+    const results = await crawlAllChains();
     res.json({
       message: 'Crawled all chains.',
       results
