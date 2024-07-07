@@ -45,6 +45,12 @@ function logRPCPerformance() {
 
 setInterval(logRPCPerformance, 60000); // Log performance every minute
 
+// Add the refreshChainsData function
+function refreshChainsData() {
+  chainsData = loadChainsData();
+  logger.info('Chains data refreshed');
+}
+
 // Improved RPC selection logic
 function selectBestRPC(chain: string): string {
   const rpcAddresses = chainsData[chain]?.['rpc-addresses'];
