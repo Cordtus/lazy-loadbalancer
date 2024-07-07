@@ -73,12 +73,7 @@ This project implements a personal load balancer for IBC network API endpoints u
 
 3. Get endpoints for a specific chain:
    ```bash
-   curl http://localhost:3000/api/chain-endpoints/osmosis
-   ```
-
-4. Get total number of chains:
-   ```bash
-   curl http://localhost:3000/api/total-chains
+   curl http://localhost:3000/api/rpc-list/osmosis
    ```
 
 ### Load Balancing RPC Requests
