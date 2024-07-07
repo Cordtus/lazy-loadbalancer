@@ -35,7 +35,7 @@ function selectNextRPC(chain: string): string {
   return rpcAddresses[index];
 }
 
-import { CircuitBreaker } from './circuitBreaker';
+import { CircuitBreaker } from './circuitBreaker.js';
 
 const circuitBreakers: Record<string, CircuitBreaker> = {};
 
