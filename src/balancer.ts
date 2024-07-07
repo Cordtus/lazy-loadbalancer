@@ -14,29 +14,41 @@ ensureFilesExist();
 
 let chainsData: Record<string, ChainEntry> = loadChainsData();
 const rpcIndexMap: Record<string, number> = {};
+let blacklistedIPs: Record<string, number> = {};
 
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
 });
 
-async function updateRPCList(chain: string, failedAddresses: string[]): Promise<void> {
-  const chainData = chainsData[chain];
-  if (!chainData) return;
+const BLACKLIST_DURATION = 7 * 24 * 60 * 60 * 1000; // 1 week in milliseconds
+const MAX_CONSECUTIVE_FAILURES = 3;
 
-  chainData['rpc-addresses'] = chainData['rpc-addresses'].filter(addr => !failedAddresses.includes(addr));
-  
-  // Add failed addresses to blacklist
-  const blacklist = new Set(loadBlacklistedIPs());
-  failedAddresses.forEach(addr => blacklist.add(new URL(addr).hostname));
-  saveBlacklistedIPs(Array.from(blacklist));
+// Load blacklisted IPs and convert to Record<string, number>
+function loadAndConvertBlacklistedIPs() {
+  const ips = loadBlacklistedIPs();
+  const now = Date.now();
+  blacklistedIPs = ips.reduce((acc, ip) => {
+    acc[ip] = now;
+    return acc;
+  }, {} as Record<string, number>);
+}
 
-  // Update chain data
-  saveChainsData(chainsData);
+loadAndConvertBlacklistedIPs();
 
-  // If RPC list is getting low, trigger a crawl
-  if (chainData['rpc-addresses'].length < 3) {
-    logger.warn(`Low RPC count for ${chain}, consider running a crawl`);
+function updateBlacklist() {
+  const now = Date.now();
+  for (const [ip, timestamp] of Object.entries(blacklistedIPs)) {
+    if (now - timestamp > BLACKLIST_DURATION) {
+      delete blacklistedIPs[ip];
+    }
   }
+  saveBlacklistedIPs(Object.keys(blacklistedIPs));
+}
+
+function blacklistIP(ip: string) {
+  blacklistedIPs[ip] = Date.now();
+  saveBlacklistedIPs(Object.keys(blacklistedIPs));
+  logger.info(`IP ${ip} has been blacklisted`);
 }
 
 async function proxyRequest(chain: string, endpoint: string, req: Request, res: Response): Promise<void> {
@@ -52,11 +64,20 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
 
   let attempts = 0;
   const maxAttempts = rpcAddresses.length;
-  const failedAttempts: string[] = [];
+  let consecutiveFailures = 0;
+  let lastFailedIP = '';
 
   while (attempts < maxAttempts) {
     const rpcAddress = rpcAddresses[rpcIndexMap[chain]];
     const url = new URL(`${rpcAddress.replace(/\/$/, '')}/${endpoint}`);
+    const ip = url.hostname;
+
+    if (ip in blacklistedIPs) {
+      rpcIndexMap[chain] = (rpcIndexMap[chain] + 1) % rpcAddresses.length;
+      attempts++;
+      continue;
+    }
+
     logger.info(`Proxying ${req.method} request to: ${url.href}`);
 
     try {
@@ -79,6 +100,10 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
       const responseText = await response.text();
 
       if (response.ok) {
+        // Reset consecutive failures
+        consecutiveFailures = 0;
+        lastFailedIP = '';
+
         // Set safe headers
         for (const [key, value] of response.headers.entries()) {
           if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
@@ -96,24 +121,32 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
         return;
       } else {
         logger.error(`Non-OK response from ${url.href}: ${response.status}`);
-        failedAttempts.push(rpcAddress);
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
-    } catch (error: any) {
+    } catch (error) {
       logger.error(`Error proxying request to ${url.href}:`, error);
-      failedAttempts.push(rpcAddress);
+      
+      if (ip === lastFailedIP) {
+        consecutiveFailures++;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          blacklistIP(ip);
+          consecutiveFailures = 0;
+        }
+      } else {
+        consecutiveFailures = 1;
+        lastFailedIP = ip;
+      }
     }
 
     rpcIndexMap[chain] = (rpcIndexMap[chain] + 1) % rpcAddresses.length;
     attempts++;
   }
 
-  // Update the RPC list and blacklist failed addresses
-  if (failedAttempts.length > 0) {
-    await updateRPCList(chain, failedAttempts);
-  }
-
   res.status(502).send('Unable to process request after multiple attempts');
 }
+
+// Update blacklist periodically
+setInterval(updateBlacklist, 60 * 60 * 1000); // Check every hour
 
 app.use(express.json());
 
