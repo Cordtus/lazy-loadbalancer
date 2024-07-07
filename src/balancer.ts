@@ -34,52 +34,61 @@ function selectNextRPC(chain: string): string {
 }
 
 async function proxyRequest(chain: string, req: Request, res: Response): Promise<void> {
-  const rpcAddress = selectNextRPC(chain);
-  const url = new URL(rpcAddress);
+  const maxAttempts = chainsData[chain]?.['rpc-addresses'].length || 1;
+  let attempts = 0;
 
-  logger.debug(`Proxying request to ${url.href}`);
+  while (attempts < maxAttempts) {
+    const rpcAddress = selectNextRPC(chain);
+    const url = new URL(rpcAddress);
 
-  try {
-    const fetchOptions: RequestInit = {
-      method: req.method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...Object.fromEntries(
-          Object.entries(req.headers)
-            .filter(([key]) => !['host', 'content-length'].includes(key.toLowerCase()))
-        ),
-      },
-      body: JSON.stringify(req.body),
-      signal: AbortSignal.timeout(config.requestTimeout),
-      agent: httpsAgent,
-    };
+    logger.debug(`Proxying request to ${url.href} (Attempt ${attempts + 1}/${maxAttempts})`);
 
-    const startTime = Date.now();
-    const response = await fetch(url.href, fetchOptions);
-    const endTime = Date.now();
+    try {
+      const fetchOptions: RequestInit = {
+        method: req.method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...Object.fromEntries(
+            Object.entries(req.headers)
+              .filter(([key]) => !['host', 'content-length'].includes(key.toLowerCase()))
+          ),
+        },
+        body: JSON.stringify(req.body),
+        signal: AbortSignal.timeout(config.requestTimeout),
+        agent: httpsAgent,
+      };
 
-    logger.debug(`Response received in ${endTime - startTime}ms with status ${response.status}`);
+      const startTime = Date.now();
+      const response = await fetch(url.href, fetchOptions);
+      const endTime = Date.now();
 
-    if (response.ok) {
-      const responseText = await response.text();
-      logger.debug(`Response body: ${responseText.substring(0, 200)}...`);
+      logger.debug(`Response received in ${endTime - startTime}ms with status ${response.status}`);
 
-      // Set safe headers
-      for (const [key, value] of response.headers.entries()) {
-        if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
-          res.setHeader(key, value);
+      if (response.ok) {
+        const responseText = await response.text();
+        logger.debug(`Response body: ${responseText.substring(0, 200)}...`);
+
+        // Set safe headers
+        for (const [key, value] of response.headers.entries()) {
+          if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
+            res.setHeader(key, value);
+          }
         }
+        
+        res.status(response.status).send(responseText);
+        return;
+      } else {
+        logger.error(`Non-OK response from ${url.href}: ${response.status}`);
+        attempts++;
       }
-      
-      res.status(response.status).send(responseText);
-    } else {
-      logger.error(`Non-OK response from ${url.href}: ${response.status}`);
-      throw new Error(`HTTP error! status: ${response.status}`);
+    } catch (error) {
+      logger.error(`Error proxying request to ${url.href}:`, error);
+      attempts++;
     }
-  } catch (error) {
-    logger.error(`Error proxying request to ${url.href}:`, error);
-    res.status(502).send('Unable to process request');
   }
+
+  logger.error(`Failed to proxy request after ${maxAttempts} attempts`);
+  res.status(502).send('Unable to process request after multiple attempts');
 }
 
 app.use(express.json());
