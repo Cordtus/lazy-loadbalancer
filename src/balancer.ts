@@ -82,6 +82,8 @@ function selectBestRPC(chain: string): string {
 async function proxyRequest(chain: string, endpoint: string, req: Request, res: Response): Promise<void> {
   const rpcAddress = selectBestRPC(chain);
   const url = new URL(rpcAddress);
+  
+  // Only append the endpoint if it's not empty
   if (endpoint) {
     url.pathname = url.pathname.replace(/\/$/, '') + '/' + endpoint.replace(/^\//, '');
   }
