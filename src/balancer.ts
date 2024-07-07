@@ -6,6 +6,7 @@ import { ChainEntry } from './types.js';
 import https from 'https';
 import fetch, { RequestInit } from 'node-fetch';
 import apiRouter from './api.js';
+import { IncomingHttpHeaders } from 'http';
 
 const app = express();
 const PORT = config.port;
@@ -23,7 +24,6 @@ const httpsAgent = new https.Agent({
 const BLACKLIST_DURATION = 7 * 24 * 60 * 60 * 1000; // 1 week in milliseconds
 const MAX_CONSECUTIVE_FAILURES = 3;
 
-// Load blacklisted IPs and convert to Record<string, number>
 function loadAndConvertBlacklistedIPs() {
   const ips = loadBlacklistedIPs();
   const now = Date.now();
@@ -51,6 +51,11 @@ function blacklistIP(ip: string) {
   logger.info(`IP ${ip} has been blacklisted`);
 }
 
+function refreshChainsData() {
+  chainsData = loadChainsData();
+  logger.info('Chains data refreshed');
+}
+
 async function proxyRequest(chain: string, endpoint: string, req: Request, res: Response): Promise<void> {
   const rpcAddresses = chainsData[chain]?.['rpc-addresses'];
   if (!rpcAddresses || rpcAddresses.length === 0) {
@@ -71,6 +76,11 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
     const rpcAddress = rpcAddresses[rpcIndexMap[chain]];
     const url = new URL(`${rpcAddress.replace(/\/$/, '')}/${endpoint}`);
     const ip = url.hostname;
+    
+    logger.debug(`Proxying to URL: ${url.href}`);
+    logger.debug(`Request method: ${req.method}`);
+    logger.debug(`Request headers: ${JSON.stringify(req.headers)}`);
+    logger.debug(`Request body: ${JSON.stringify(req.body)}`);
 
     if (ip in blacklistedIPs) {
       rpcIndexMap[chain] = (rpcIndexMap[chain] + 1) % rpcAddresses.length;
@@ -100,18 +110,15 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
       const responseText = await response.text();
 
       if (response.ok) {
-        // Reset consecutive failures
         consecutiveFailures = 0;
         lastFailedIP = '';
 
-        // Set safe headers
         for (const [key, value] of response.headers.entries()) {
           if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
             res.setHeader(key, value);
           }
         }
         
-        // Try to parse as JSON, if it fails, send as text
         try {
           const jsonData = JSON.parse(responseText);
           res.status(response.status).json(jsonData);
@@ -145,18 +152,59 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
   res.status(502).send('Unable to process request after multiple attempts');
 }
 
-// Update blacklist periodically
 setInterval(updateBlacklist, 60 * 60 * 1000); // Check every hour
 
 app.use(express.json());
 
+app.use((req, res, next) => {
+  const logRequest = {
+    method: req.method,
+    url: req.url,
+    headers: req.headers as IncomingHttpHeaders,
+    body: req.body,
+    query: req.query,
+    params: req.params,
+  };
+  logger.debug(`Incoming request: ${JSON.stringify(logRequest, null, 2)}`);
+  next();
+});
+
 app.use('/api', apiRouter);
 
+app.all('/lb/:chain', async (req: Request, res: Response) => {
+  const { chain } = req.params;
+  
+  logger.debug(`Received ${req.method} request for chain: ${chain}`);
+  logger.debug(`Full URL: ${req.protocol}://${req.get('host')}${req.originalUrl}`);
+  logger.debug(`Headers: ${JSON.stringify(req.headers)}`);
+  logger.debug(`Body: ${JSON.stringify(req.body)}`);
+
+  refreshChainsData();
+
+  try {
+    if (!chainsData[chain]) {
+      logger.info(`Chain data for ${chain} not found, please update chain data first.`);
+      return res.status(404).send(`Chain ${chain} not found. Please update chain data first.`);
+    }
+
+    await proxyRequest(chain, '', req, res);
+  } catch (error) {
+    logger.error(`Error proxying request for ${chain}:`, error);
+    res.status(500).send(`Error proxying request: ${(error as Error).message}`);
+  }
+});
+
+// Keep the existing route for requests with additional path
 app.all('/lb/:chain/*', async (req: Request, res: Response) => {
   const { chain } = req.params;
-  const endpoint = req.params[0];
+  const endpoint = req.params[0] || '';
 
   logger.debug(`Received ${req.method} request for chain: ${chain}, endpoint: ${endpoint}`);
+  logger.debug(`Full URL: ${req.protocol}://${req.get('host')}${req.originalUrl}`);
+  logger.debug(`Headers: ${JSON.stringify(req.headers)}`);
+  logger.debug(`Body: ${JSON.stringify(req.body)}`);
+
+  refreshChainsData();
 
   try {
     if (!chainsData[chain]) {
@@ -171,6 +219,21 @@ app.all('/lb/:chain/*', async (req: Request, res: Response) => {
   }
 });
 
+app.options('/lb/:chain/*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(200);
+});
+
+// Move this to the end to catch any unhandled routes
+app.use('*', (req, res) => {
+  logger.warn(`Unhandled request: ${req.method} ${req.url}`);
+  res.status(404).json({ error: 'Not Found', message: 'The requested resource does not exist' });
+});
+
 app.listen(PORT, () => {
   logger.info(`Load balancer running at http://localhost:${PORT}`);
 });
+
+export { refreshChainsData };
