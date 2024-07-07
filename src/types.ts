@@ -41,6 +41,17 @@ export interface StatusInfo {
   };
 }
 
+export interface StatusResponse {
+  result: {
+    node_info: {
+      network: string;
+    };
+    sync_info: {
+      latest_block_time: string;
+    };
+  };
+}
+
 export interface Api {
   address: string;
 }
