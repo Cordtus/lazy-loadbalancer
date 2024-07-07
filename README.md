@@ -1,6 +1,11 @@
 # Load Balancer for Cosmos SDK RPC Endpoints
 
-This project implements a personal load balancer for IBC network API endpoints using Node.js. It dynamically fetches, caches, and crawls RPC endpoint data for different chains, providing a robust and efficient way to interact with multiple Cosmos SDK-based networks.
+Dynamically fetches, caches, and crawls RPC endpoints on all (or specified) chains, and acts as a round-robin load balancer using the generated list to provide a single reliable interface for general work or research involving multiple chains.
+
+Inspired by the work of Jacob Gadikian and [Eco-stake](https://ecologi.com/ecostake), this tool combines [Notional](https://notional.ventures/)'s [RPC crawler](https://github.com/notional-labs) logic, and the [cosmos.directory](https://cosmos.directory) Load balanced proxy endpoint created by "Tom". 
+It is intended as a personal load balancer / unified endpoint for multiple Cosmos-SDK / IBC chain API endpoints. 
+
+
 
 ## Prerequisites
 
@@ -11,8 +16,8 @@ This project implements a personal load balancer for IBC network API endpoints u
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/load-balancer.git
-   cd load-balancer
+   git clone https://github.com/Cordtus/lazy-loadbalancer.git
+   cd lazy-loadbalancer
    ```
 
 2. Install dependencies:
@@ -111,8 +116,27 @@ Logs are stored in the `./logs` directory, with separate files for each module (
 
 ## Contributing
 
-Contributions are welcome. Please submit issues and pull requests on the project's GitHub repository.
+Contributions are welcome. Issues and pull requests are much appreciated.
 
 ## License
 
 This project is licensed under the MIT License.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
