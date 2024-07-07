@@ -10,8 +10,12 @@ const createLogger = (filename: string, level: string) => {
     level: level,
     format: winston.format.combine(
       winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-      winston.format.printf(({ level, message, timestamp }) => {
-        return `${timestamp} ${level}: ${message}`;
+      winston.format.printf(({ level, message, timestamp, ...metadata }) => {
+        let msg = `${timestamp} ${level}: ${message}`;
+        if (Object.keys(metadata).length > 0) {
+          msg += JSON.stringify(metadata);
+        }
+        return msg;
       })
     ),
     transports: [
@@ -26,14 +30,25 @@ const createLogger = (filename: string, level: string) => {
   });
 };
 
+// Override the log levels to ensure 'debug' is captured
+config.logging.balancer = 'debug';
+config.logging.crawler = 'debug';
+config.logging.app = 'debug';
+
 export const balancerLogger = createLogger('balancer', config.logging.balancer);
 export const crawlerLogger = createLogger('crawler', config.logging.crawler);
 export const appLogger = createLogger('app', config.logging.app);
 
-if (process.env.NODE_ENV !== 'production') {
-  [balancerLogger, crawlerLogger, appLogger].forEach(logger => {
-    logger.add(new winston.transports.Console({
-      format: winston.format.simple(),
-    }));
-  });
-}
+// Always add console transport, but use different formats for production and development
+const consoleFormat = process.env.NODE_ENV === 'production'
+  ? winston.format.simple()
+  : winston.format.combine(
+      winston.format.colorize(),
+      winston.format.simple()
+    );
+
+[balancerLogger, crawlerLogger, appLogger].forEach(logger => {
+  logger.add(new winston.transports.Console({
+    format: consoleFormat,
+  }));
+});

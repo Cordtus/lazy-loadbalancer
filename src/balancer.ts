@@ -24,135 +24,109 @@ const httpsAgent = new https.Agent({
 const BLACKLIST_DURATION = 7 * 24 * 60 * 60 * 1000; // 1 week in milliseconds
 const MAX_CONSECUTIVE_FAILURES = 3;
 
-function loadAndConvertBlacklistedIPs() {
-  const ips = loadBlacklistedIPs();
-  const now = Date.now();
-  blacklistedIPs = ips.reduce((acc, ip) => {
-    acc[ip] = now;
-    return acc;
-  }, {} as Record<string, number>);
+// RPC performance tracking
+const rpcPerformance: Record<string, { totalTime: number; requests: number; lastUsed: number }> = {};
+
+function updateRPCPerformance(url: string, time: number) {
+  if (!rpcPerformance[url]) {
+    rpcPerformance[url] = { totalTime: 0, requests: 0, lastUsed: 0 };
+  }
+  rpcPerformance[url].totalTime += time;
+  rpcPerformance[url].requests += 1;
+  rpcPerformance[url].lastUsed = Date.now();
 }
 
-loadAndConvertBlacklistedIPs();
+function logRPCPerformance() {
+  for (const [url, performance] of Object.entries(rpcPerformance)) {
+    const avgTime = performance.totalTime / performance.requests;
+    logger.info(`RPC ${url} average response time: ${avgTime.toFixed(2)}ms over ${performance.requests} requests`);
+  }
+}
 
-function updateBlacklist() {
+setInterval(logRPCPerformance, 60000); // Log performance every minute
+
+// Improved RPC selection logic
+function selectBestRPC(chain: string): string {
+  const rpcAddresses = chainsData[chain]?.['rpc-addresses'];
+  if (!rpcAddresses || rpcAddresses.length === 0) {
+    throw new Error('No RPC addresses available for the specified chain.');
+  }
+
   const now = Date.now();
-  for (const [ip, timestamp] of Object.entries(blacklistedIPs)) {
-    if (now - timestamp > BLACKLIST_DURATION) {
-      delete blacklistedIPs[ip];
+  let bestRPC = rpcAddresses[0];
+  let bestScore = -Infinity;
+
+  for (const rpc of rpcAddresses) {
+    const performance = rpcPerformance[rpc] || { totalTime: 0, requests: 1, lastUsed: 0 };
+    const avgResponseTime = performance.totalTime / performance.requests;
+    const timeSinceLastUse = now - performance.lastUsed;
+    
+    // Score based on average response time and time since last use
+    const score = (1 / avgResponseTime) * timeSinceLastUse;
+    
+    if (score > bestScore) {
+      bestScore = score;
+      bestRPC = rpc;
     }
   }
-  saveBlacklistedIPs(Object.keys(blacklistedIPs));
-}
 
-function blacklistIP(ip: string) {
-  blacklistedIPs[ip] = Date.now();
-  saveBlacklistedIPs(Object.keys(blacklistedIPs));
-  logger.info(`IP ${ip} has been blacklisted`);
-}
-
-function refreshChainsData() {
-  chainsData = loadChainsData();
-  logger.info('Chains data refreshed');
+  return bestRPC;
 }
 
 async function proxyRequest(chain: string, endpoint: string, req: Request, res: Response): Promise<void> {
-  const rpcAddresses = chainsData[chain]?.['rpc-addresses'];
-  if (!rpcAddresses || rpcAddresses.length === 0) {
-    res.status(500).send('No RPC addresses available for the specified chain.');
-    return;
+  const rpcAddress = selectBestRPC(chain);
+  const url = new URL(rpcAddress);
+  if (endpoint) {
+    url.pathname = url.pathname.replace(/\/$/, '') + '/' + endpoint.replace(/^\//, '');
   }
 
-  if (!(chain in rpcIndexMap)) {
-    rpcIndexMap[chain] = 0;
-  }
+  logger.debug(`Proxying request to ${url.href}`);
 
-  let attempts = 0;
-  const maxAttempts = rpcAddresses.length;
-  let consecutiveFailures = 0;
-  let lastFailedIP = '';
+  try {
+    const fetchOptions: RequestInit = {
+      method: req.method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Host': url.hostname,
+        ...Object.fromEntries(
+          Object.entries(req.headers)
+            .filter(([key]) => !['host', 'content-length'].includes(key.toLowerCase()))
+        ),
+      },
+      body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
+      signal: AbortSignal.timeout(config.requestTimeout),
+      agent: httpsAgent,
+    };
 
-  while (attempts < maxAttempts) {
-    const rpcAddress = rpcAddresses[rpcIndexMap[chain]];
-    const url = new URL(`${rpcAddress.replace(/\/$/, '')}/${endpoint}`);
-    const ip = url.hostname;
+    const startTime = Date.now();
+    const response = await fetch(url.href, fetchOptions);
+    const endTime = Date.now();
     
-    logger.debug(`Proxying to URL: ${url.href}`);
-    logger.debug(`Request method: ${req.method}`);
-    logger.debug(`Request headers: ${JSON.stringify(req.headers)}`);
-    logger.debug(`Request body: ${JSON.stringify(req.body)}`);
+    updateRPCPerformance(rpcAddress, endTime - startTime);
 
-    if (ip in blacklistedIPs) {
-      rpcIndexMap[chain] = (rpcIndexMap[chain] + 1) % rpcAddresses.length;
-      attempts++;
-      continue;
-    }
+    logger.debug(`Response received in ${endTime - startTime}ms with status ${response.status}`);
 
-    logger.info(`Proxying ${req.method} request to: ${url.href}`);
-
-    try {
-      const fetchOptions: RequestInit = {
-        method: req.method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Host': url.hostname,
-          ...Object.fromEntries(
-            Object.entries(req.headers)
-              .filter(([key]) => !['host', 'content-length'].includes(key.toLowerCase()))
-          ),
-        },
-        body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
-        signal: AbortSignal.timeout(config.requestTimeout),
-        agent: httpsAgent,
-      };
-
-      const response = await fetch(url.href, fetchOptions);
+    if (response.ok) {
       const responseText = await response.text();
+      logger.debug(`Response body: ${responseText.substring(0, 200)}...`);
 
-      if (response.ok) {
-        consecutiveFailures = 0;
-        lastFailedIP = '';
-
-        for (const [key, value] of response.headers.entries()) {
-          if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
-            res.setHeader(key, value);
-          }
+      // Set safe headers
+      for (const [key, value] of response.headers.entries()) {
+        if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
+          res.setHeader(key, value);
         }
-        
-        try {
-          const jsonData = JSON.parse(responseText);
-          res.status(response.status).json(jsonData);
-        } catch {
-          res.status(response.status).send(responseText);
-        }
-        return;
-      } else {
-        logger.error(`Non-OK response from ${url.href}: ${response.status}`);
-        throw new Error(`HTTP error! status: ${response.status}`);
       }
-    } catch (error) {
-      logger.error(`Error proxying request to ${url.href}:`, error);
       
-      if (ip === lastFailedIP) {
-        consecutiveFailures++;
-        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-          blacklistIP(ip);
-          consecutiveFailures = 0;
-        }
-      } else {
-        consecutiveFailures = 1;
-        lastFailedIP = ip;
-      }
+      res.status(response.status).send(responseText);
+    } else {
+      logger.error(`Non-OK response from ${url.href}: ${response.status}`);
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-
-    rpcIndexMap[chain] = (rpcIndexMap[chain] + 1) % rpcAddresses.length;
-    attempts++;
+  } catch (error) {
+    logger.error(`Error proxying request to ${url.href}:`, error);
+    res.status(502).send('Unable to process request');
   }
-
-  res.status(502).send('Unable to process request after multiple attempts');
 }
-
-setInterval(updateBlacklist, 60 * 60 * 1000); // Check every hour
 
 app.use(express.json());
 
@@ -171,31 +145,7 @@ app.use((req, res, next) => {
 
 app.use('/api', apiRouter);
 
-app.all('/lb/:chain', async (req: Request, res: Response) => {
-  const { chain } = req.params;
-  
-  logger.debug(`Received ${req.method} request for chain: ${chain}`);
-  logger.debug(`Full URL: ${req.protocol}://${req.get('host')}${req.originalUrl}`);
-  logger.debug(`Headers: ${JSON.stringify(req.headers)}`);
-  logger.debug(`Body: ${JSON.stringify(req.body)}`);
-
-  refreshChainsData();
-
-  try {
-    if (!chainsData[chain]) {
-      logger.info(`Chain data for ${chain} not found, please update chain data first.`);
-      return res.status(404).send(`Chain ${chain} not found. Please update chain data first.`);
-    }
-
-    await proxyRequest(chain, '', req, res);
-  } catch (error) {
-    logger.error(`Error proxying request for ${chain}:`, error);
-    res.status(500).send(`Error proxying request: ${(error as Error).message}`);
-  }
-});
-
-// Keep the existing route for requests with additional path
-app.all('/lb/:chain/*', async (req: Request, res: Response) => {
+app.all('/lb/:chain/*?', async (req: Request, res: Response) => {
   const { chain } = req.params;
   const endpoint = req.params[0] || '';
 
@@ -204,7 +154,7 @@ app.all('/lb/:chain/*', async (req: Request, res: Response) => {
   logger.debug(`Headers: ${JSON.stringify(req.headers)}`);
   logger.debug(`Body: ${JSON.stringify(req.body)}`);
 
-  refreshChainsData();
+  const startTime = Date.now();
 
   try {
     if (!chainsData[chain]) {
@@ -216,6 +166,9 @@ app.all('/lb/:chain/*', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error(`Error proxying request for ${chain}/${endpoint}:`, error);
     res.status(500).send(`Error proxying request: ${(error as Error).message}`);
+  } finally {
+    const endTime = Date.now();
+    logger.debug(`Request for ${chain}/${endpoint} took ${endTime - startTime}ms`);
   }
 });
 
@@ -226,7 +179,6 @@ app.options('/lb/:chain/*', (req, res) => {
   res.sendStatus(200);
 });
 
-// Move this to the end to catch any unhandled routes
 app.use('*', (req, res) => {
   logger.warn(`Unhandled request: ${req.method} ${req.url}`);
   res.status(404).json({ error: 'Not Found', message: 'The requested resource does not exist' });
