@@ -9,8 +9,8 @@ import { crawlerLogger as logger } from './logger.js';
 const ping = promisify(dns.lookup);
 
 const visitedNodes = new Set<string>();
-const rejectedIPs = loadRejectedIPs();
-const goodIPs = loadGoodIPs();
+let rejectedIPs = loadRejectedIPs();
+let goodIPs = loadGoodIPs();
 
 const COMMON_PORTS = [443, 26657, 36657, 46657, 56657];
 
@@ -92,11 +92,16 @@ async function checkEndpoint(url: string): Promise<boolean> {
   }
 }
 
-async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promise<void> {
-  const chainsData = loadChainsData();
+async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promise<{
+  newEndpoints: number,
+  totalEndpoints: number
+}> {
+  let chainsData = loadChainsData();
   let toCheck: PeerInfo[] = [];
   const checked = new Set<string>();
   const blacklistedIPs = new Set(loadBlacklistedIPs());
+
+  let newEndpointsCount = 0;
 
   logger.info(`Starting crawl for chain ${chainName} with ${initialRpcUrls.length} initial RPC URLs`);
 
@@ -119,19 +124,88 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
 
   if (toCheck.length === 0) {
     logger.warn(`No peers found for chain ${chainName}. Skipping crawl.`);
-    return;
+    return { newEndpoints: 0, totalEndpoints: initialRpcUrls.length };
   }
 
+  for (let round = 0; round < 5; round++) {
+    logger.info(`Starting round ${round + 1} of crawling for ${chainName}. Peers to check: ${toCheck.length}`);
+
+    // Batch IP validation
+    logger.debug(`Validating ${toCheck.length * toCheck[0].ips.length} IPs`);
+    const validIps = (await Promise.all(
+      toCheck.flatMap(peer => peer.ips.map(async ip => ({ ip, valid: await isValidIp(ip) })))
+    )).filter(result => result.valid && !blacklistedIPs.has(result.ip)).map(result => result.ip);
+
+    logger.info(`Found ${validIps.length} valid IPs`);
+
+    // Batch port checking
+    for (const port of COMMON_PORTS) {
+      logger.debug(`Checking port ${port} for ${validIps.length} IPs`);
+      const batchResults = await Promise.all(
+        validIps.map(async ip => {
+          const url = `http${port === 443 ? 's' : ''}://${ip}:${port}`;
+          if (checked.has(url)) return null;
+          checked.add(url);
+          
+          const isValid = await checkEndpoint(url);
+          if (isValid) {
+            logger.info(`Valid endpoint found: ${url}`);
+            if (!chainsData[chainName]['rpc-addresses'].includes(url)) {
+              chainsData[chainName]['rpc-addresses'].push(url);
+              goodIPs[ip] = Date.now();
+              logger.info(`Added new RPC endpoint: ${url}`);
+              newEndpointsCount++;
+            }
+            const netInfo = await fetchNetInfo(url);
+            if (netInfo) {
+              const peers = extractPeerInfo(netInfo.peers);
+              logger.debug(`Found ${peers.length} new peers from ${url}`);
+              toCheck.push(...peers);
+            }
+            return url;
+          }
+          return null;
+        })
+      );
+
+      const validEndpoints = batchResults.filter(Boolean);
+      logger.info(`Found ${validEndpoints.length} valid endpoints for port ${port}`);
+
+      // Save data after each port check
+      saveChainsData(chainsData);
+      saveGoodIPs(goodIPs);
+      saveRejectedIPs(rejectedIPs);
+    }
+
+    // Prepare for next round
+    toCheck = toCheck.filter(peer => !checked.has(peer.id));
+    logger.info(`Round ${round + 1} completed. Peers to check in next round: ${toCheck.length}`);
+
+    if (toCheck.length === 0) {
+      logger.info(`No more peers to check. Crawl for ${chainName} completed.`);
+      break;
+    }
+  }
+
+  // Final save
   saveChainsData(chainsData);
   saveGoodIPs(goodIPs);
   saveRejectedIPs(rejectedIPs);
+
   logger.info(`Crawl for ${chainName} finished. Total RPC endpoints: ${chainsData[chainName]['rpc-addresses'].length}`);
+
+  return {
+    newEndpoints: newEndpointsCount,
+    totalEndpoints: chainsData[chainName]['rpc-addresses'].length
+  };
 }
 
-async function startCrawling(): Promise<void> {
+async function startCrawling(): Promise<Record<string, { newEndpoints: number, totalEndpoints: number }>> {
   const chainsData = loadChainsData();
   const totalChains = Object.keys(chainsData).length;
   logger.info(`Starting to crawl all chains. Total chains: ${totalChains}`);
+
+  const results: Record<string, { newEndpoints: number, totalEndpoints: number }> = {};
 
   for (const [index, [chainName, chainData]] of Object.entries(chainsData).entries()) {
     logger.info(`Crawling chain ${index + 1}/${totalChains}: ${chainName}`);
@@ -141,15 +215,21 @@ async function startCrawling(): Promise<void> {
         continue;
       }
 
-      await crawlNetwork(chainName, chainData['rpc-addresses']);
+      results[chainName] = await crawlNetwork(chainName, chainData['rpc-addresses']);
+      
+      // Save data after each chain is completed
+      saveChainsData(chainsData);
+      saveGoodIPs(goodIPs);
+      saveRejectedIPs(rejectedIPs);
+
       logger.info(`Finished crawling chain ${index + 1}/${totalChains}: ${chainName}`);
     } catch (error) {
       logger.error(`Error crawling chain ${chainName}:`, error);
-      // Continue with the next chain instead of throwing
     }
   }
 
   logger.info('Finished crawling all chains');
+  return results;
 }
 
 export { crawlNetwork, startCrawling };
