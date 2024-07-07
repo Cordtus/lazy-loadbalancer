@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express';
-import { loadChainsData, saveChainsData, ensureFilesExist, loadBlacklistedIPs, saveBlacklistedIPs } from './utils.js';
+import { loadChainsData } from './utils.js';
 import { balancerLogger as logger } from './logger.js';
 import config from './config.js';
 import { ChainEntry } from './types.js';
@@ -10,75 +10,64 @@ import apiRouter from './api.js';
 const app = express();
 const PORT = config.port;
 
-ensureFilesExist();
-
-let chainsData: Record<string, ChainEntry> = loadChainsData();
+const chainsData: Record<string, ChainEntry> = loadChainsData();
 const rpcIndexMap: Record<string, number> = {};
 
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
 });
 
-async function updateRPCList(chain: string, failedAddresses: string[]): Promise<void> {
-  const chainData = chainsData[chain];
-  if (!chainData) return;
-
-  chainData['rpc-addresses'] = chainData['rpc-addresses'].filter(addr => !failedAddresses.includes(addr));
-  
-  // Add failed addresses to blacklist
-  const blacklist = new Set(loadBlacklistedIPs());
-  failedAddresses.forEach(addr => blacklist.add(new URL(addr).hostname));
-  saveBlacklistedIPs(Array.from(blacklist));
-
-  // Update chain data
-  saveChainsData(chainsData);
-
-  // If RPC list is getting low, trigger a crawl
-  if (chainData['rpc-addresses'].length < 3) {
-    logger.warn(`Low RPC count for ${chain}, consider running a crawl`);
-  }
-}
-
-async function proxyRequest(chain: string, endpoint: string, req: Request, res: Response): Promise<void> {
+function selectNextRPC(chain: string): string {
   const rpcAddresses = chainsData[chain]?.['rpc-addresses'];
   if (!rpcAddresses || rpcAddresses.length === 0) {
-    res.status(500).send('No RPC addresses available for the specified chain.');
-    return;
+    throw new Error('No RPC addresses available for the specified chain.');
   }
 
   if (!(chain in rpcIndexMap)) {
     rpcIndexMap[chain] = 0;
   }
 
+  const index = rpcIndexMap[chain];
+  rpcIndexMap[chain] = (index + 1) % rpcAddresses.length;
+
+  return rpcAddresses[index];
+}
+
+async function proxyRequest(chain: string, req: Request, res: Response): Promise<void> {
+  const maxAttempts = chainsData[chain]?.['rpc-addresses'].length || 1;
   let attempts = 0;
-  const maxAttempts = rpcAddresses.length;
-  const failedAttempts: string[] = [];
 
   while (attempts < maxAttempts) {
-    const rpcAddress = rpcAddresses[rpcIndexMap[chain]];
-    const url = new URL(`${rpcAddress.replace(/\/$/, '')}/${endpoint}`);
-    logger.info(`Proxying ${req.method} request to: ${url.href}`);
+    const rpcAddress = selectNextRPC(chain);
+    const url = new URL(rpcAddress);
+
+    logger.debug(`Proxying request to ${url.href} (Attempt ${attempts + 1}/${maxAttempts})`);
 
     try {
       const fetchOptions: RequestInit = {
         method: req.method,
         headers: {
           'Content-Type': 'application/json',
-          'Host': url.hostname,
           ...Object.fromEntries(
             Object.entries(req.headers)
               .filter(([key]) => !['host', 'content-length'].includes(key.toLowerCase()))
           ),
         },
-        body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body),
+        body: JSON.stringify(req.body),
         signal: AbortSignal.timeout(config.requestTimeout),
         agent: httpsAgent,
       };
 
+      const startTime = Date.now();
       const response = await fetch(url.href, fetchOptions);
-      const responseText = await response.text();
+      const endTime = Date.now();
+
+      logger.debug(`Response received in ${endTime - startTime}ms with status ${response.status}`);
 
       if (response.ok) {
+        const responseText = await response.text();
+        logger.debug(`Response body: ${responseText.substring(0, 200)}...`);
+
         // Set safe headers
         for (const [key, value] of response.headers.entries()) {
           if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
@@ -86,54 +75,47 @@ async function proxyRequest(chain: string, endpoint: string, req: Request, res: 
           }
         }
         
-        // Try to parse as JSON, if it fails, send as text
-        try {
-          const jsonData = JSON.parse(responseText);
-          res.status(response.status).json(jsonData);
-        } catch {
-          res.status(response.status).send(responseText);
-        }
+        res.status(response.status).send(responseText);
         return;
       } else {
         logger.error(`Non-OK response from ${url.href}: ${response.status}`);
-        failedAttempts.push(rpcAddress);
+        attempts++;
       }
-    } catch (error: any) {
+    } catch (error) {
       logger.error(`Error proxying request to ${url.href}:`, error);
-      failedAttempts.push(rpcAddress);
+      attempts++;
     }
-
-    rpcIndexMap[chain] = (rpcIndexMap[chain] + 1) % rpcAddresses.length;
-    attempts++;
   }
 
-  // Update the RPC list and blacklist failed addresses
-  if (failedAttempts.length > 0) {
-    await updateRPCList(chain, failedAttempts);
-  }
-
+  logger.error(`Failed to proxy request after ${maxAttempts} attempts`);
   res.status(502).send('Unable to process request after multiple attempts');
 }
 
 app.use(express.json());
 
+app.use((req, res, next) => {
+  logger.debug(`Incoming request: ${req.method} ${req.url}`);
+  logger.debug(`Headers: ${JSON.stringify(req.headers)}`);
+  logger.debug(`Body: ${JSON.stringify(req.body)}`);
+  next();
+});
+
 app.use('/api', apiRouter);
 
-app.all('/lb/:chain/*', async (req: Request, res: Response) => {
+app.all('/lb/:chain', async (req: Request, res: Response) => {
   const { chain } = req.params;
-  const endpoint = req.params[0];
 
-  logger.debug(`Received ${req.method} request for chain: ${chain}, endpoint: ${endpoint}`);
+  logger.debug(`Received ${req.method} request for chain: ${chain}`);
 
   try {
     if (!chainsData[chain]) {
-      logger.info(`Chain data for ${chain} not found, please update chain data first.`);
-      return res.status(404).send(`Chain ${chain} not found. Please update chain data first.`);
+      logger.info(`Chain data for ${chain} not found.`);
+      return res.status(404).send(`Chain ${chain} not found.`);
     }
 
-    await proxyRequest(chain, endpoint, req, res);
+    await proxyRequest(chain, req, res);
   } catch (error) {
-    logger.error(`Error proxying request for ${chain}/${endpoint}:`, error);
+    logger.error(`Error proxying request for ${chain}:`, error);
     res.status(500).send(`Error proxying request: ${(error as Error).message}`);
   }
 });

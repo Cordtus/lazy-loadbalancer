@@ -85,29 +85,36 @@ function extractPeerInfo(peers: Peer[]): PeerInfo[] {
 async function checkEndpoint(url: string, expectedChainId: string): Promise<{ isValid: boolean; actualChainId: string | null }> {
   try {
     const response = await fetchWithTimeout(`${url}/status`);
-    if (!response.ok) return { isValid: false, actualChainId: null };
+    if (!response.ok) {
+      rejectedIPs.add(new URL(url).hostname);
+      return { isValid: false, actualChainId: null };
+    }
     
     const data = await response.json() as StatusResponse;
     const { result } = data;
 
-    // Check if the RPC belongs to the expected network
     const actualChainId = result.node_info.network;
     
-    // Check if the latest block time is within 1 minute of current time
     const latestBlockTime = parseISO(result.sync_info.latest_block_time);
     const currentTime = new Date();
     const timeDifference = Math.abs(differenceInSeconds(latestBlockTime, currentTime));
 
     const isHealthy = timeDifference <= 60; // 60 seconds = 1 minute
 
+    if (!isHealthy) {
+      rejectedIPs.add(new URL(url).hostname);
+    }
+
     return { 
       isValid: isHealthy && actualChainId === expectedChainId,
       actualChainId
     };
   } catch {
+    rejectedIPs.add(new URL(url).hostname);
     return { isValid: false, actualChainId: null };
   }
 }
+
 
 async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promise<{
   newEndpoints: number,

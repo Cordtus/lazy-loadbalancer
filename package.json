@@ -19,7 +19,8 @@
     "node-fetch": "^3.3.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.5.2",
-    "winston": "^3.13.0"
+    "winston": "^3.13.0",
+    "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
     "@types/dotenv": "^8.2.0",

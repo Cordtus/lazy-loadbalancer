@@ -2,9 +2,9 @@ import express, { Request, Response } from 'express';
 import { crawlNetwork, startCrawling } from './crawler.js';
 import { fetchChainData, fetchChains } from './fetchChains.js';
 import { loadChainsData, saveChainsData } from './utils.js';
-import { balancerLogger as logger } from './logger.js';
 
 const router = express.Router();
+
 
 // Update a single chain's data from the registry
 router.post('/update-chain/:chainName', async (req: Request, res: Response) => {
