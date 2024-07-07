@@ -252,10 +252,13 @@ app.post('/:chain/update-chain', async (req: Request, res: Response) => {
 
 app.post('/crawl-all-chains', async (req: Request, res: Response) => {
   try {
+    logger.info('Starting crawl-all-chains');
     await startCrawling();
+    logger.info('Finished crawl-all-chains');
     res.send('Crawled all chains.');
   } catch (error) {
-    res.status(500).send(`Error crawling all chains: ${(error as Error).message}`);
+    logger.error('Error in crawl-all-chains:', error);
+    res.status(500).send(`Error initiating crawl for all chains: ${(error as Error).message}`);
   }
 });
 
