@@ -14,7 +14,6 @@ let rejectedIPs = loadRejectedIPs();
 let goodIPs = loadGoodIPs();
 
 const COMMON_PORTS = [443, 2401, 10157, 15957, 14657, 22257, 26657, 26667, 27957, 31657, 33657, 36657, 37657, 46657, 53657, 56657, 58657];
-
 interface PeerInfo {
   id: string;
   moniker: string;

@@ -4,6 +4,7 @@ import { balancerLogger as logger } from './logger.js';
 import config from './config.js';
 import { ChainEntry } from './types.js';
 import https from 'https';
+import http from 'http';
 import fetch, { RequestInit } from 'node-fetch';
 import apiRouter from './api.js';
 
@@ -12,10 +13,11 @@ const PORT = config.port;
 
 const chainsData: Record<string, ChainEntry> = loadChainsData();
 const rpcIndexMap: Record<string, number> = {};
-
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
 });
+
+const httpAgent = new http.Agent();
 
 function selectNextRPC(chain: string): string {
   const rpcAddresses = chainsData[chain]?.['rpc-addresses'];
@@ -33,6 +35,10 @@ function selectNextRPC(chain: string): string {
   return rpcAddresses[index];
 }
 
+import { CircuitBreaker } from './circuitBreaker.js';
+
+const circuitBreakers: Record<string, CircuitBreaker> = {};
+
 async function proxyRequest(chain: string, req: Request, res: Response): Promise<void> {
   const maxAttempts = chainsData[chain]?.['rpc-addresses'].length || 1;
   let attempts = 0;
@@ -40,6 +46,15 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
   while (attempts < maxAttempts) {
     const rpcAddress = selectNextRPC(chain);
     const url = new URL(rpcAddress);
+
+    if (!circuitBreakers[rpcAddress]) {
+      circuitBreakers[rpcAddress] = new CircuitBreaker();
+    }
+
+    if (circuitBreakers[rpcAddress].isOpen()) {
+      attempts++;
+      continue;
+    }
 
     logger.debug(`Proxying request to ${url.href} (Attempt ${attempts + 1}/${maxAttempts})`);
 
@@ -55,7 +70,7 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
         },
         body: JSON.stringify(req.body),
         signal: AbortSignal.timeout(config.requestTimeout),
-        agent: httpsAgent,
+        agent: url.protocol === 'https:' ? httpsAgent : httpAgent,
       };
 
       const startTime = Date.now();
@@ -68,6 +83,16 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
         const responseText = await response.text();
         logger.debug(`Response body: ${responseText.substring(0, 200)}...`);
 
+        // Check if the response is valid JSON
+        try {
+          JSON.parse(responseText);
+        } catch (error) {
+          logger.error(`Invalid JSON response from ${url.href}`);
+          circuitBreakers[rpcAddress].recordFailure();
+          attempts++;
+          continue;
+        }
+
         // Set safe headers
         for (const [key, value] of response.headers.entries()) {
           if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
@@ -79,10 +104,12 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
         return;
       } else {
         logger.error(`Non-OK response from ${url.href}: ${response.status}`);
+        circuitBreakers[rpcAddress].recordFailure();
         attempts++;
       }
     } catch (error) {
       logger.error(`Error proxying request to ${url.href}:`, error);
+      circuitBreakers[rpcAddress].recordFailure();
       attempts++;
     }
   }
