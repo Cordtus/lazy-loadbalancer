@@ -35,6 +35,10 @@ function selectNextRPC(chain: string): string {
   return rpcAddresses[index];
 }
 
+import { CircuitBreaker } from './circuitBreaker';
+
+const circuitBreakers: Record<string, CircuitBreaker> = {};
+
 async function proxyRequest(chain: string, req: Request, res: Response): Promise<void> {
   const maxAttempts = chainsData[chain]?.['rpc-addresses'].length || 1;
   let attempts = 0;
@@ -42,6 +46,15 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
   while (attempts < maxAttempts) {
     const rpcAddress = selectNextRPC(chain);
     const url = new URL(rpcAddress);
+
+    if (!circuitBreakers[rpcAddress]) {
+      circuitBreakers[rpcAddress] = new CircuitBreaker();
+    }
+
+    if (circuitBreakers[rpcAddress].isOpen()) {
+      attempts++;
+      continue;
+    }
 
     logger.debug(`Proxying request to ${url.href} (Attempt ${attempts + 1}/${maxAttempts})`);
 
@@ -75,6 +88,7 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
           JSON.parse(responseText);
         } catch (error) {
           logger.error(`Invalid JSON response from ${url.href}`);
+          circuitBreakers[rpcAddress].recordFailure();
           attempts++;
           continue;
         }
@@ -90,10 +104,12 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
         return;
       } else {
         logger.error(`Non-OK response from ${url.href}: ${response.status}`);
+        circuitBreakers[rpcAddress].recordFailure();
         attempts++;
       }
     } catch (error) {
       logger.error(`Error proxying request to ${url.href}:`, error);
+      circuitBreakers[rpcAddress].recordFailure();
       attempts++;
     }
   }

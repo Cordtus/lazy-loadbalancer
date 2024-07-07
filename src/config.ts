@@ -4,7 +4,7 @@ dotenv.config();
 
 export default {
   port: process.env.PORT || 3000,
-  requestTimeout: 5000,
+  requestTimeout: 12000,
   github: {
     pat: process.env.GITHUB_PAT,
     owner: 'cosmos',
