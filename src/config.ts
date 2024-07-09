@@ -20,8 +20,8 @@ export default {
     recheckInterval: 24 * 60 * 60 * 1000, // 24 hours
   },
   logging: {
-    balancer: process.env.LOG_LEVEL_BALANCER || 'info',
-    crawler: process.env.LOG_LEVEL_CRAWLER || 'info',
-    app: process.env.LOG_LEVEL_APP || 'info',
+    balancer: 'info',
+    crawler: 'info',
+    app: 'info'
   }
 };

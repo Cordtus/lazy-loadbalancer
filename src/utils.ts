@@ -1,16 +1,20 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { URL, fileURLToPath } from 'url';
 import { appLogger as logger } from './logger.js';
-export function getDirName(metaUrl) {
+import { ChainEntry, BlacklistedIP } from './types.js';
+
+export function getDirName(metaUrl: string | URL) {
     const __filename = fileURLToPath(metaUrl);
     return path.dirname(__filename);
 }
+
 const CHAINS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/chains.json');
 const REJECTED_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/rejected_ips.json');
 const GOOD_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/good_ips.json');
 const LOGS_DIR_PATH = path.resolve(getDirName(import.meta.url), '../logs');
 const BLACKLISTED_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/blacklisted_ips.json');
+
 export function ensureFilesExist() {
     if (!fs.existsSync(path.dirname(CHAINS_FILE_PATH))) {
         fs.mkdirSync(path.dirname(CHAINS_FILE_PATH), { recursive: true });
@@ -31,7 +35,8 @@ export function ensureFilesExist() {
         fs.writeFileSync(BLACKLISTED_IPS_FILE_PATH, JSON.stringify([]));
     }
 }
-export function loadChainsData() {
+
+export function loadChainsData(): Record<string, ChainEntry> {
     if (!fs.existsSync(path.dirname(CHAINS_FILE_PATH))) {
         fs.mkdirSync(path.dirname(CHAINS_FILE_PATH), { recursive: true });
     }
@@ -47,7 +52,8 @@ export function loadChainsData() {
         return {};
     }
 }
-export function saveChainsData(chainsData) {
+
+export function saveChainsData(chainsData: { [x: string]: ChainEntry; }) {
     if (!fs.existsSync(path.dirname(CHAINS_FILE_PATH))) {
         fs.mkdirSync(path.dirname(CHAINS_FILE_PATH), { recursive: true });
     }
@@ -59,6 +65,7 @@ export function saveChainsData(chainsData) {
         logger.error('Error writing chains file:', error);
     }
 }
+
 export function loadRejectedIPs() {
     if (!fs.existsSync(path.dirname(REJECTED_IPS_FILE_PATH))) {
         fs.mkdirSync(path.dirname(REJECTED_IPS_FILE_PATH), { recursive: true });
@@ -73,7 +80,8 @@ export function loadRejectedIPs() {
         return new Set();
     }
 }
-export function saveRejectedIPs(rejectedIPs) {
+
+export function saveRejectedIPs(rejectedIPs: Iterable<unknown> | ArrayLike<unknown>) {
     if (!fs.existsSync(path.dirname(REJECTED_IPS_FILE_PATH))) {
         fs.mkdirSync(path.dirname(REJECTED_IPS_FILE_PATH), { recursive: true });
     }
@@ -85,6 +93,7 @@ export function saveRejectedIPs(rejectedIPs) {
         logger.error('Error writing rejected IPs file:', error);
     }
 }
+
 export function loadGoodIPs() {
     if (!fs.existsSync(path.dirname(GOOD_IPS_FILE_PATH))) {
         fs.mkdirSync(path.dirname(GOOD_IPS_FILE_PATH), { recursive: true });
@@ -99,7 +108,8 @@ export function loadGoodIPs() {
         return {};
     }
 }
-export function saveGoodIPs(goodIPs) {
+
+export function saveGoodIPs(goodIPs: any) {
     if (!fs.existsSync(path.dirname(GOOD_IPS_FILE_PATH))) {
         fs.mkdirSync(path.dirname(GOOD_IPS_FILE_PATH), { recursive: true });
     }
@@ -111,27 +121,37 @@ export function saveGoodIPs(goodIPs) {
         logger.error('Error writing good IPs file:', error);
     }
 }
-export function loadBlacklistedIPs() {
+
+export function loadBlacklistedIPs(): BlacklistedIP[] {
     ensureFilesExist();
     try {
         const data = fs.readFileSync(BLACKLISTED_IPS_FILE_PATH, 'utf-8');
         return JSON.parse(data);
-    }
-    catch (error) {
+    } catch (error) {
         logger.error('Error reading blacklisted IPs file:', error);
         return [];
     }
 }
-export function saveBlacklistedIPs(blacklistedIPs) {
+
+export function saveBlacklistedIPs(blacklistedIPs: BlacklistedIP[]): void {
     try {
         fs.writeFileSync(BLACKLISTED_IPS_FILE_PATH, JSON.stringify(blacklistedIPs, null, 2));
         logger.info('Blacklisted IPs saved.');
-    }
-    catch (error) {
+    } catch (error) {
         logger.error('Error writing blacklisted IPs file:', error);
     }
 }
-export function logToFile(moduleName, message) {
+
+export function cleanupBlacklist(): void {
+    const blacklistedIPs = loadBlacklistedIPs();
+    const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const updatedBlacklist = blacklistedIPs.filter(entry => entry.timestamp > twentyFourHoursAgo);
+    saveBlacklistedIPs(updatedBlacklist);
+}
+
+setInterval(cleanupBlacklist, 24 * 60 * 60 * 1000);
+
+export function logToFile(moduleName: string, message: string) {
     ensureFilesExist();
     const logFilePath = path.resolve(LOGS_DIR_PATH, `${moduleName}.log`);
     fs.appendFileSync(logFilePath, `${new Date().toISOString()} - ${message}\n`);

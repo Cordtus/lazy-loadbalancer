@@ -71,3 +71,8 @@ export interface ErrorResponse {
   message: string;
   stack?: string;
 }
+
+export interface BlacklistedIP {
+  ip: string;
+  timestamp: number;
+}

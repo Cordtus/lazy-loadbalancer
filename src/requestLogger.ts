@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import { balancerLogger } from '../src/logger';
+import { balancerLogger, crawlerLogger, appLogger } from './logger.js';
+
+
 
 export function requestLogger(req: Request, res: Response, next: NextFunction) {
   const sanitizedHeaders = { ...req.headers };

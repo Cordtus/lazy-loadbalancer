@@ -7,6 +7,8 @@ import https from 'https';
 import http from 'http';
 import fetch, { RequestInit } from 'node-fetch';
 import apiRouter from './api.js';
+import { requestLogger } from './requestLogger.js';
+import { errorHandler } from './errorHandler.js';
 
 const app = express();
 const PORT = config.port;
@@ -127,6 +129,9 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(express.json());
+app.use(requestLogger);
+
 app.use('/api', apiRouter);
 
 app.all('/lb/:chain', async (req: Request, res: Response) => {
@@ -146,6 +151,8 @@ app.all('/lb/:chain', async (req: Request, res: Response) => {
     res.status(500).send(`Error proxying request: ${(error as Error).message}`);
   }
 });
+
+app.use(errorHandler);
 
 app.listen(PORT, () => {
   logger.info(`Load balancer running at http://localhost:${PORT}`);

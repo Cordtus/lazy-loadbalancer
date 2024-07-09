@@ -1,7 +1,7 @@
 import { differenceInSeconds, parseISO } from 'date-fns';
 import fetch, { Response as FetchResponse } from 'node-fetch';
-import { ChainEntry, NetInfo, StatusInfo, StatusResponse, Peer } from './types';
-import { loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, loadGoodIPs, saveGoodIPs, loadBlacklistedIPs } from './utils.js';
+import { ChainEntry, NetInfo, StatusInfo, StatusResponse, Peer, BlacklistedIP } from './types';
+import { loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, loadGoodIPs, saveGoodIPs, loadBlacklistedIPs, saveBlacklistedIPs } from './utils.js';
 import config from './config.js';
 import dns from 'dns';
 import pLimit from 'p-limit';
@@ -13,6 +13,7 @@ const ping = promisify(dns.lookup);
 const visitedNodes = new Set<string>();
 let rejectedIPs = loadRejectedIPs();
 let goodIPs = loadGoodIPs();
+let blacklistedIPs: Set<string> = new Set(loadBlacklistedIPs().map(item => item.ip));
 
 const COMMON_PORTS = [443, 2401, 10157, 15957, 14657, 22257, 26657, 26667, 27957, 31657, 33657, 36657, 37657, 46657, 53657, 56657, 58657];
 interface PeerInfo {
@@ -46,6 +47,12 @@ async function isValidIp(ip: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function addToBlacklist(ip: string): void {
+  blacklistedIPs.add(ip);
+  const blacklistedIPsArray: BlacklistedIP[] = Array.from(blacklistedIPs).map(ip => ({ ip, timestamp: Date.now() }));
+  saveBlacklistedIPs(blacklistedIPsArray);
 }
 
 async function fetchNetInfo(url: string): Promise<NetInfo | null> {
@@ -84,6 +91,15 @@ function extractPeerInfo(peers: Peer[]): PeerInfo[] {
 
 async function checkEndpoint(url: string, expectedChainId: string): Promise<{ isValid: boolean; actualChainId: string | null; url: string; peers: string[] }> {
   try {
+    const hostname = new URL(url).hostname;
+    if (blacklistedIPs.has(hostname)) {
+      return { isValid: false, actualChainId: null, url, peers: [] };
+    }
+    if (!(await isValidIp(hostname))) {
+      addToBlacklist(hostname);
+      return { isValid: false, actualChainId: null, url, peers: [] };
+    }
+    
     const response = await fetchWithTimeout(`${url}/status`);
     if (!response.ok) {
       rejectedIPs.add(new URL(url).hostname);
@@ -130,8 +146,7 @@ async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promis
   totalEndpoints: number,
   misplacedEndpoints: number
 }> {
-  let chainsData = loadChainsData();
-  const blacklistedIPs = new Set(loadBlacklistedIPs());
+  let chainsData: Record<string, ChainEntry> = loadChainsData();
   const checkedUrls = new Set<string>();
 
   let newEndpointsCount = 0;
