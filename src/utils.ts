@@ -94,20 +94,20 @@ export function saveRejectedIPs(rejectedIPs: Iterable<unknown> | ArrayLike<unkno
     }
 }
 
-export function loadGoodIPs() {
+export function loadGoodIPs(): Record<string, boolean> {
     if (!fs.existsSync(path.dirname(GOOD_IPS_FILE_PATH))) {
-        fs.mkdirSync(path.dirname(GOOD_IPS_FILE_PATH), { recursive: true });
+      fs.mkdirSync(path.dirname(GOOD_IPS_FILE_PATH), { recursive: true });
     }
     ensureFilesExist();
     try {
-        const data = fs.readFileSync(GOOD_IPS_FILE_PATH, 'utf-8');
-        return JSON.parse(data);
+      const data = fs.readFileSync(GOOD_IPS_FILE_PATH, 'utf-8');
+      return JSON.parse(data);
     }
     catch (error) {
-        logger.error('Error reading good IPs file:', error);
-        return {};
+      logger.error('Error reading good IPs file:', error);
+      return {};
     }
-}
+  }
 
 export function saveGoodIPs(goodIPs: any) {
     if (!fs.existsSync(path.dirname(GOOD_IPS_FILE_PATH))) {
@@ -143,13 +143,12 @@ export function saveBlacklistedIPs(blacklistedIPs: BlacklistedIP[]): void {
 }
 
 export function cleanupBlacklist(): void {
-    const blacklistedIPs = loadBlacklistedIPs();
-    const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
-    const updatedBlacklist = blacklistedIPs.filter(entry => entry.timestamp > twentyFourHoursAgo);
+    const sixHoursAgo = Date.now() - 6 * 60 * 60 * 1000;
+    const updatedBlacklist = loadBlacklistedIPs().filter(entry => 
+      entry.timestamp > sixHoursAgo || (entry.failureCount || 0) < 5
+    );
     saveBlacklistedIPs(updatedBlacklist);
-}
-
-setInterval(cleanupBlacklist, 24 * 60 * 60 * 1000);
+  }
 
 export function logToFile(moduleName: string, message: string) {
     ensureFilesExist();

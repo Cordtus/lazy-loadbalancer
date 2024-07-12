@@ -6,7 +6,7 @@ import config from './config.js';
 const logDir = path.join(process.cwd(), 'logs');
 
 const createLogger = (filename: string, level: string) => {
-  return winston.createLogger({
+  const logger = winston.createLogger({
     level: level,
     format: winston.format.combine(
       winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
@@ -28,6 +28,16 @@ const createLogger = (filename: string, level: string) => {
       }),
     ],
   });
+
+  // Add console transport
+  logger.add(new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize(),
+      winston.format.simple()
+    )
+  }));
+
+  return logger;
 };
 
 // Override the log levels to ensure 'debug' is captured
@@ -38,17 +48,3 @@ config.logging.app = 'debug';
 export const balancerLogger = createLogger('balancer', config.logging.balancer);
 export const crawlerLogger = createLogger('crawler', config.logging.crawler);
 export const appLogger = createLogger('app', config.logging.app);
-
-// Always add console transport, but use different formats for production and development
-const consoleFormat = process.env.NODE_ENV === 'production'
-  ? winston.format.simple()
-  : winston.format.combine(
-      winston.format.colorize(),
-      winston.format.simple()
-    );
-
-[balancerLogger, crawlerLogger, appLogger].forEach(logger => {
-  logger.add(new winston.transports.Console({
-    format: consoleFormat,
-  }));
-});

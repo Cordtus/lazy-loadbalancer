@@ -44,6 +44,7 @@ export interface StatusInfo {
 export interface StatusResponse {
   result: {
     node_info: {
+      [x: string]: any;
       network: string;
     };
     sync_info: {
@@ -74,5 +75,6 @@ export interface ErrorResponse {
 
 export interface BlacklistedIP {
   ip: string;
+  failureCount: number;
   timestamp: number;
 }

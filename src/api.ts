@@ -1,10 +1,10 @@
 import express, { Request, Response } from 'express';
-import { crawlNetwork, crawlAllChains } from './crawler.js';
+import { crawlNetwork, crawlAllChains as crawlAllChainsFromCrawler } from './crawler.js';
 import { fetchChainData, fetchChains } from './fetchChains.js';
 import { loadChainsData, saveChainsData } from './utils.js';
+import { crawlerLogger as logger } from './logger.js';
 
 const router = express.Router();
-
 
 // Update a single chain's data from the registry
 router.post('/update-chain/:chainName', async (req: Request, res: Response) => {
@@ -20,7 +20,8 @@ router.post('/update-chain/:chainName', async (req: Request, res: Response) => {
       res.status(404).send(`Chain ${chainName} not found in registry.`);
     }
   } catch (error) {
-    res.status(500).send(`Error updating chain data: ${(error as Error).message}`);
+    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+    res.status(500).send(`Error updating chain data: ${errorMessage}`);
   }
 });
 
@@ -30,7 +31,8 @@ router.post('/update-all-chains', async (req: Request, res: Response) => {
     await fetchChains();
     res.send('All chains data updated from registry.');
   } catch (error) {
-    res.status(500).send(`Error updating all chains: ${(error as Error).message}`);
+    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+    res.status(500).send(`Error updating all chains: ${errorMessage}`);
   }
 });
 
@@ -49,7 +51,12 @@ router.post('/crawl-chain/:chainName', async (req: Request, res: Response) => {
       result
     });
   } catch (error) {
-    res.status(500).send(`Error crawling chain: ${(error as Error).message}`);
+    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+    logger.error(`Error crawling chain ${chainName}:`, error);
+    res.status(500).json({
+      message: `Error crawling chain: ${errorMessage}`,
+      error: String(error)
+    });
   }
 });
 
@@ -62,6 +69,7 @@ router.post('/crawl-all-chains', async (req: Request, res: Response) => {
       results
     });
   } catch (error) {
+    logger.error('Error crawling all chains:', error);
     res.status(500).send(`Error crawling all chains: ${(error as Error).message}`);
   }
 });
@@ -99,3 +107,7 @@ router.get('/rpc-list/:chainName', (req: Request, res: Response) => {
 });
 
 export default router;
+
+function crawlAllChains() {
+  throw new Error('Function not implemented.');
+}

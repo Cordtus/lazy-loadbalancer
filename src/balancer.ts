@@ -3,43 +3,124 @@ import { loadChainsData } from './utils.js';
 import { balancerLogger as logger } from './logger.js';
 import config from './config.js';
 import { ChainEntry } from './types.js';
-import https from 'https';
-import http from 'http';
+import { HttpsAgent } from 'agentkeepalive';
+import { Agent as HttpAgent } from 'http';
 import fetch, { RequestInit } from 'node-fetch';
 import apiRouter from './api.js';
 import { requestLogger } from './requestLogger.js';
 import { errorHandler } from './errorHandler.js';
+import NodeCache from 'node-cache';
+import http2 from 'http2';
 
 const app = express();
 const PORT = config.port;
 
 const chainsData: Record<string, ChainEntry> = loadChainsData();
-const rpcIndexMap: Record<string, number> = {};
-const httpsAgent = new https.Agent({
-  rejectUnauthorized: false,
+const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
+
+const httpsAgent = new HttpsAgent({
+  keepAlive: true,
+  maxSockets: 100,
+  maxFreeSockets: 10,
+  timeout: 60000,
 });
 
-const httpAgent = new http.Agent();
+const httpAgent = new HttpAgent({
+  keepAlive: true,
+  maxSockets: 100,
+  maxFreeSockets: 10,
+  timeout: 60000,
+});
+
+interface EndpointStats {
+  address: string;
+  weight: number;
+  responseTime: number;
+}
+
+class WeightedRoundRobin {
+  private endpoints: EndpointStats[];
+  private currentIndex: number = 0;
+
+  constructor(addresses: string[]) {
+    this.endpoints = addresses.map(address => ({
+      address,
+      weight: 1,
+      responseTime: 0,
+    }));
+  }
+
+  selectNextEndpoint(): string {
+    const selected = this.endpoints[this.currentIndex];
+    this.currentIndex = (this.currentIndex + 1) % this.endpoints.length;
+    return selected.address;
+  }
+
+  updateStats(address: string, responseTime: number) {
+    const endpoint = this.endpoints.find(e => e.address === address);
+    if (endpoint) {
+      endpoint.responseTime = responseTime;
+      endpoint.weight = 1 / (responseTime || 1); // Avoid division by zero
+    }
+    this.endpoints.sort((a, b) => b.weight - a.weight);
+  }
+}
+
+const loadBalancers: Record<string, WeightedRoundRobin> = {};
 
 function selectNextRPC(chain: string): string {
-  const rpcAddresses = chainsData[chain]?.['rpc-addresses'];
-  if (!rpcAddresses || rpcAddresses.length === 0) {
-    throw new Error('No RPC addresses available for the specified chain.');
+  if (!loadBalancers[chain]) {
+    loadBalancers[chain] = new WeightedRoundRobin(chainsData[chain]['rpc-addresses']);
   }
-
-  if (!(chain in rpcIndexMap)) {
-    rpcIndexMap[chain] = 0;
-  }
-
-  const index = rpcIndexMap[chain];
-  rpcIndexMap[chain] = (index + 1) % rpcAddresses.length;
-
-  return rpcAddresses[index];
+  return loadBalancers[chain].selectNextEndpoint();
 }
 
 import { CircuitBreaker } from './circuitBreaker.js';
 
 const circuitBreakers: Record<string, CircuitBreaker> = {};
+const http2Sessions: Record<string, http2.ClientHttp2Session> = {};
+
+async function getHttp2Session(url: URL): Promise<http2.ClientHttp2Session> {
+  const authority = `${url.protocol}//${url.host}`;
+  if (!http2Sessions[authority]) {
+    http2Sessions[authority] = http2.connect(authority);
+    http2Sessions[authority].on('error', (err) => {
+      delete http2Sessions[authority];
+      logger.error(`HTTP/2 session error for ${authority}:`, err);
+    });
+  }
+  return http2Sessions[authority];
+}
+
+async function proxyRequestHttp2(chain: string, req: Request, res: Response): Promise<void> {
+  const rpcAddress = selectNextRPC(chain);
+  const url = new URL(rpcAddress);
+  const session = await getHttp2Session(url);
+
+  const stream = session.request({
+    ':method': req.method,
+    ':path': url.pathname + url.search,
+    ...req.headers,
+  });
+
+  stream.on('response', (headers) => {
+    res.writeHead(headers[':status'] as number, headers);
+  });
+
+  stream.on('data', (chunk) => {
+    res.write(chunk);
+  });
+
+  stream.on('end', () => {
+    res.end();
+  });
+
+  if (req.body) {
+    stream.end(JSON.stringify(req.body));
+  } else {
+    stream.end();
+  }
+}
 
 async function proxyRequest(chain: string, req: Request, res: Response): Promise<void> {
   const maxAttempts = chainsData[chain]?.['rpc-addresses'].length || 1;
@@ -78,8 +159,9 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
       const startTime = Date.now();
       const response = await fetch(url.href, fetchOptions);
       const endTime = Date.now();
+      const responseTime = endTime - startTime;
 
-      logger.debug(`Response received in ${endTime - startTime}ms with status ${response.status}`);
+      logger.debug(`Response received in ${responseTime}ms with status ${response.status}`);
 
       if (response.ok) {
         const responseText = await response.text();
@@ -102,6 +184,8 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
           }
         }
         
+        loadBalancers[chain].updateStats(rpcAddress, responseTime);
+        circuitBreakers[rpcAddress].recordSuccess();
         res.status(response.status).send(responseText);
         return;
       } else {
@@ -118,6 +202,45 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
 
   logger.error(`Failed to proxy request after ${maxAttempts} attempts`);
   res.status(502).send('Unable to process request after multiple attempts');
+}
+
+async function proxyRequestWithRetry(chain: string, req: Request, res: Response): Promise<void> {
+  const maxRetries = 3;
+  let retryCount = 0;
+
+  while (retryCount < maxRetries) {
+    try {
+      await proxyRequest(chain, req, res);
+      return;
+    } catch (error) {
+      retryCount++;
+      if (retryCount >= maxRetries) {
+        throw error;
+      }
+      const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
+async function proxyRequestWithCaching(chain: string, req: Request, res: Response): Promise<void> {
+  const cacheKey = `${chain}:${req.method}:${req.url}:${JSON.stringify(req.body)}`;
+  const cachedResponse = cache.get(cacheKey);
+
+  if (cachedResponse) {
+    res.status(200).send(cachedResponse);
+    return;
+  }
+
+  const originalSend = res.send;
+  res.send = function(body) {
+    if (req.method === 'GET' || req.method === 'POST') {
+      cache.set(cacheKey, body);
+    }
+    return originalSend.call(this, body);
+  };
+
+  await proxyRequestWithRetry(chain, req, res);
 }
 
 app.use(express.json());
@@ -145,10 +268,10 @@ app.all('/lb/:chain', async (req: Request, res: Response) => {
       return res.status(404).send(`Chain ${chain} not found.`);
     }
 
-    await proxyRequest(chain, req, res);
+    await proxyRequestWithCaching(chain, req, res);
   } catch (error) {
     logger.error(`Error proxying request for ${chain}:`, error);
-    res.status(500).send(`Error proxying request: ${(error as Error).message}`);
+    res.status(502).send(`Unable to process request after multiple attempts`);
   }
 });
 
