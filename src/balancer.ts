@@ -6,7 +6,6 @@ import { ChainEntry } from './types.js';
 import { HttpsAgent } from 'agentkeepalive';
 import { Agent as HttpAgent } from 'http';
 import fetch, { RequestInit } from 'node-fetch';
-import apiRouter from './api.js';
 import { requestLogger } from './requestLogger.js';
 import { errorHandler } from './errorHandler.js';
 import NodeCache from 'node-cache';
@@ -254,8 +253,6 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use(requestLogger);
-
-app.use('/api', apiRouter);
 
 app.all('/lb/:chain', async (req: Request, res: Response) => {
   const { chain } = req.params;

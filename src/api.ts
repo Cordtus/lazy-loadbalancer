@@ -1,113 +1,118 @@
 import express, { Request, Response } from 'express';
-import { crawlNetwork, crawlAllChains as crawlAllChainsFromCrawler } from './crawler.js';
-import { fetchChainData, fetchChains } from './fetchChains.js';
-import { loadChainsData, saveChainsData } from './utils.js';
-import { crawlerLogger as logger } from './logger.js';
-
+import { crawlNetwork, crawlAllChains } from './crawler.js';
+import { loadChainsData, saveChainsData, cleanupBlacklist } from './utils.js';
+import { appLogger as logger } from './logger.js';
+import { ChainEntry } from './types.js';
 const router = express.Router();
 
-// Update a single chain's data from the registry
-router.post('/update-chain/:chainName', async (req: Request, res: Response) => {
-  const { chainName } = req.params;
-  try {
-    const chainData = await fetchChainData(chainName);
-    if (chainData) {
-      const chainsData = loadChainsData();
-      chainsData[chainName] = chainData;
-      saveChainsData(chainsData);
-      res.send(`Chain data for ${chainName} updated from registry.`);
-    } else {
-      res.status(404).send(`Chain ${chainName} not found in registry.`);
-    }
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
-    res.status(500).send(`Error updating chain data: ${errorMessage}`);
-  }
-});
-
-// Update all chains from the registry
-router.post('/update-all-chains', async (req: Request, res: Response) => {
-  try {
-    await fetchChains();
-    res.send('All chains data updated from registry.');
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
-    res.status(500).send(`Error updating all chains: ${errorMessage}`);
-  }
-});
-
-// Crawl a specific chain
-router.post('/crawl-chain/:chainName', async (req: Request, res: Response) => {
-  const { chainName } = req.params;
-  try {
-    const chainsData = loadChainsData();
-    const chainEntry = chainsData[chainName];
-    if (!chainEntry) {
-      return res.status(404).send(`Chain ${chainName} not found.`);
-    }
-    const result = await crawlNetwork(chainName, chainEntry['rpc-addresses']);
-    res.json({
-      message: `Crawled chain ${chainName}.`,
-      result
-    });
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
-    logger.error(`Error crawling chain ${chainName}:`, error);
-    res.status(500).json({
-      message: `Error crawling chain: ${errorMessage}`,
-      error: String(error)
-    });
-  }
-});
-
-// Crawl all chains
-router.post('/crawl-all-chains', async (req: Request, res: Response) => {
-  try {
-    const results = await crawlAllChains();
-    res.json({
-      message: 'Crawled all chains.',
-      results
-    });
-  } catch (error) {
-    logger.error('Error crawling all chains:', error);
-    res.status(500).send(`Error crawling all chains: ${(error as Error).message}`);
-  }
-});
-
-// Get list of all chain names
+// Get a list of all chains
 router.get('/chain-list', (req: Request, res: Response) => {
   const chainsData = loadChainsData();
-  res.json(Object.keys(chainsData));
+  const chainList = Object.keys(chainsData);
+  res.json(chainList);
 });
 
-// Get summary of all chains (name and number of endpoints)
+// Get a summary of all chains (name and number of endpoints)
 router.get('/chains-summary', (req: Request, res: Response) => {
   const chainsData = loadChainsData();
-  const summary = Object.entries(chainsData).map(([name, data]) => ({
-    name,
-    endpointCount: data['rpc-addresses'].length
+  const summary = Object.entries(chainsData).map(([chainName, chainData]) => ({
+    name: chainName,
+    endpointCount: chainData['rpc-addresses'].length
   }));
   res.json(summary);
 });
 
-// In api.ts
+// Get endpoints for a specific chain
 router.get('/rpc-list/:chainName', (req: Request, res: Response) => {
-  const { chainName } = req.params;
   const chainsData = loadChainsData();
-  const chainData = chainsData[chainName];
-  if (chainData) {
-    res.json({
-      chainName,
-      rpcCount: chainData['rpc-addresses'].length,
-      rpcList: chainData['rpc-addresses']
-    });
+  const chainName = req.params.chainName;
+  if (chainsData[chainName]) {
+    res.json(chainsData[chainName]['rpc-addresses']);
   } else {
-    res.status(404).send(`Chain ${chainName} not found.`);
+    res.status(404).json({ error: `Chain ${chainName} not found` });
   }
 });
 
-export default router;
+// Update data for a specific chain
+router.post('/update-chain/:chainName', async (req: Request, res: Response) => {
+  const chainName = req.params.chainName;
+  const chainsData = loadChainsData();
+  if (!chainsData[chainName]) {
+    return res.status(404).json({ error: `Chain ${chainName} not found` });
+  }
+  
+  try {
+    logger.info(`Updating chain: ${chainName}`);
+    const result = await crawlNetwork(chainName, chainsData[chainName]['rpc-addresses']);
+    res.json(result);
+  } catch (error) {
+    logger.error(`Error updating chain ${chainName}:`, error);
+    res.status(500).json({ error: `Failed to update chain ${chainName}` });
+  }
+});
 
-function crawlAllChains() {
-  throw new Error('Function not implemented.');
-}
+// Update data for all chains
+router.post('/update-all-chains', async (req: Request, res: Response) => {
+  try {
+    logger.info('Updating all chains');
+    const results = await crawlAllChains();
+    res.json(results);
+  } catch (error) {
+    logger.error('Error updating all chains:', error);
+    res.status(500).json({ error: 'Failed to update all chains' });
+  }
+});
+
+// Manually trigger blacklist cleanup
+router.post('/cleanup-blacklist', (req: Request, res: Response) => {
+  try {
+    logger.info('Performing blacklist cleanup');
+    cleanupBlacklist();
+    res.json({ message: 'Blacklist cleanup completed' });
+  } catch (error) {
+    logger.error('Error during blacklist cleanup:', error);
+    res.status(500).json({ error: 'Failed to cleanup blacklist' });
+  }
+});
+
+// Add a new chain
+router.post('/add-chain', (req: Request, res: Response) => {
+  const { chainName, chainId, rpcAddresses, bech32Prefix, accountPrefix } = req.body;
+  if (!chainName || !chainId || !rpcAddresses || !Array.isArray(rpcAddresses) || !bech32Prefix || !accountPrefix) {
+    return res.status(400).json({ error: 'Invalid chain data. Please provide chainName, chainId, rpcAddresses (array), bech32Prefix, and accountPrefix.' });
+  }
+
+  const chainsData = loadChainsData();
+  if (chainsData[chainName]) {
+    return res.status(409).json({ error: `Chain ${chainName} already exists` });
+  }
+
+  chainsData[chainName] = {
+    chain_name: chainName,
+    'chain-id': chainId,
+    'rpc-addresses': rpcAddresses,
+    bech32_prefix: bech32Prefix,
+    'account-prefix': accountPrefix,
+    timeout: '30s'        // Default timeout
+  };
+
+  saveChainsData(chainsData);
+  logger.info(`Added new chain: ${chainName}`);
+  res.status(201).json({ message: `Chain ${chainName} added successfully` });
+});
+
+// Remove a chain
+router.delete('/remove-chain/:chainName', (req: Request, res: Response) => {
+  const chainName = req.params.chainName;
+  const chainsData = loadChainsData();
+  if (!chainsData[chainName]) {
+    return res.status(404).json({ error: `Chain ${chainName} not found` });
+  }
+
+  delete chainsData[chainName];
+  saveChainsData(chainsData);
+  logger.info(`Removed chain: ${chainName}`);
+  res.json({ message: `Chain ${chainName} removed successfully` });
+});
+
+export default router;

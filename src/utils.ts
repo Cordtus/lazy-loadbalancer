@@ -66,18 +66,24 @@ export function saveChainsData(chainsData: { [x: string]: ChainEntry; }) {
     }
 }
 
-export function loadRejectedIPs() {
+export function loadRejectedIPs(): Set<string> {
     if (!fs.existsSync(path.dirname(REJECTED_IPS_FILE_PATH))) {
         fs.mkdirSync(path.dirname(REJECTED_IPS_FILE_PATH), { recursive: true });
     }
     ensureFilesExist();
     try {
         const data = fs.readFileSync(REJECTED_IPS_FILE_PATH, 'utf-8');
-        return new Set(JSON.parse(data));
+        const parsedData = JSON.parse(data);
+        if (Array.isArray(parsedData)) {
+            return new Set(parsedData.filter(ip => typeof ip === 'string'));
+        } else {
+            logger.error('Rejected IPs file does not contain an array');
+            return new Set<string>();
+        }
     }
     catch (error) {
         logger.error('Error reading rejected IPs file:', error);
-        return new Set();
+        return new Set<string>();
     }
 }
 
