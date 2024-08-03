@@ -126,7 +126,7 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
   while (attempts < maxAttempts) {
     const rpcAddress = selectNextRPC(chain);
     const url = new URL(rpcAddress);
-    
+
     // Always append '/status' to the RPC URL
     url.pathname = url.pathname.replace(/\/?$/, '/') + 'status';
 
@@ -178,7 +178,7 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
             res.setHeader(key, value);
           }
         }
-        
+
         loadBalancers[chain].updateStats(rpcAddress, responseTime);
         circuitBreakers[rpcAddress].recordSuccess();
         res.status(response.status).send(responseText);
@@ -219,6 +219,12 @@ async function proxyRequestWithRetry(chain: string, req: Request, res: Response)
 }
 
 async function proxyRequestWithCaching(chain: string, req: Request, res: Response): Promise<void> {
+  // No caching for the /status endpoint to ensure round-robin works
+  if (req.url.endsWith('/status')) {
+    await proxyRequestWithRetry(chain, req, res);
+    return;
+  }
+
   const cacheKey = `${chain}:${req.method}:${req.url}:${JSON.stringify(req.body)}`;
   const cachedResponse = cache.get(cacheKey);
 
@@ -228,7 +234,7 @@ async function proxyRequestWithCaching(chain: string, req: Request, res: Respons
   }
 
   const originalSend = res.send;
-  res.send = function(body) {
+  res.send = function (body) {
     if (req.method === 'GET' || req.method === 'POST') {
       cache.set(cacheKey, body);
     }
@@ -271,4 +277,3 @@ export function startBalancer(app: Express) {
 }
 
 export { proxyRequestWithCaching };
-
