@@ -10,19 +10,20 @@ export function getDirName(metaUrl: string | URL) {
     return path.dirname(__filename);
 }
 
-const PORTS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/ports.json');
-const CHAINS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/chains.json');
-const REJECTED_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/rejected_ips.json');
-const GOOD_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/good_ips.json');
+const DATA_DIR = path.resolve(getDirName(import.meta.url), '../data');
+const PORTS_FILE_PATH = path.join(DATA_DIR, 'ports.json');
+const CHAIN_LIST_FILE_PATH = path.join(DATA_DIR, 'chain_list.json');
+const REJECTED_IPS_FILE_PATH = path.join(DATA_DIR, 'rejected_ips.json');
+const GOOD_IPS_FILE_PATH = path.join(DATA_DIR, 'good_ips.json');
 const LOGS_DIR_PATH = path.resolve(getDirName(import.meta.url), '../logs');
-const BLACKLISTED_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/blacklisted_ips.json');
+const BLACKLISTED_IPS_FILE_PATH = path.join(DATA_DIR, 'blacklisted_ips.json');
 
 export function ensureFilesExist() {
-    if (!fs.existsSync(path.dirname(CHAINS_FILE_PATH))) {
-        fs.mkdirSync(path.dirname(CHAINS_FILE_PATH), { recursive: true });
+    if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    if (!fs.existsSync(CHAINS_FILE_PATH)) {
-        fs.writeFileSync(CHAINS_FILE_PATH, JSON.stringify({}));
+    if (!fs.existsSync(CHAIN_LIST_FILE_PATH)) {
+        fs.writeFileSync(CHAIN_LIST_FILE_PATH, JSON.stringify([]));
     }
     if (!fs.existsSync(REJECTED_IPS_FILE_PATH)) {
         fs.writeFileSync(REJECTED_IPS_FILE_PATH, JSON.stringify([]));
@@ -35,6 +36,9 @@ export function ensureFilesExist() {
     }
     if (!fs.existsSync(BLACKLISTED_IPS_FILE_PATH)) {
         fs.writeFileSync(BLACKLISTED_IPS_FILE_PATH, JSON.stringify([]));
+    }
+    if (!fs.existsSync(PORTS_FILE_PATH)) {
+        fs.writeFileSync(PORTS_FILE_PATH, JSON.stringify([80, 443, 26657]));
     }
 }
 
@@ -50,9 +54,6 @@ export function loadPorts(): number[] {
 }
 
 export function savePorts(ports: number[]): void {
-    if (!fs.existsSync(path.dirname(PORTS_FILE_PATH))) {
-        fs.mkdirSync(path.dirname(PORTS_FILE_PATH), { recursive: true });
-    }
     try {
         fs.writeFileSync(PORTS_FILE_PATH, JSON.stringify(ports, null, 2));
         logger.info('Ports saved.');
@@ -62,32 +63,40 @@ export function savePorts(ports: number[]): void {
 }
 
 export function loadChainsData(): Record<string, ChainEntry> {
-    if (!fs.existsSync(path.dirname(CHAINS_FILE_PATH))) {
-        fs.mkdirSync(path.dirname(CHAINS_FILE_PATH), { recursive: true });
-    }
     ensureFilesExist();
     try {
-        const data = fs.readFileSync(CHAINS_FILE_PATH, 'utf-8');
-        const parsedData = JSON.parse(data);
-        logger.info(`Loaded chains data: ${JSON.stringify(parsedData, null, 2)}`);
-        return parsedData;
-    }
-    catch (error) {
-        logger.error('Error reading chains file:', error);
+        const chainList = JSON.parse(fs.readFileSync(CHAIN_LIST_FILE_PATH, 'utf-8')) as string[];
+        const chainsData: Record<string, ChainEntry> = {};
+        
+        for (const chainName of chainList) {
+            const chainFilePath = path.join(DATA_DIR, `${chainName}.json`);
+            if (fs.existsSync(chainFilePath)) {
+                const chainData = JSON.parse(fs.readFileSync(chainFilePath, 'utf-8')) as ChainEntry;
+                chainsData[chainName] = chainData;
+            }
+        }
+        
+        logger.info(`Loaded data for ${Object.keys(chainsData).length} chains`);
+        return chainsData;
+    } catch (error) {
+        logger.error('Error reading chains data:', error);
         return {};
     }
 }
 
-export function saveChainsData(chainsData: { [x: string]: ChainEntry; }) {
-    if (!fs.existsSync(path.dirname(CHAINS_FILE_PATH))) {
-        fs.mkdirSync(path.dirname(CHAINS_FILE_PATH), { recursive: true });
-    }
+export function saveChainsData(chainsData: Record<string, ChainEntry>) {
     try {
-        fs.writeFileSync(CHAINS_FILE_PATH, JSON.stringify(chainsData, null, 2));
+        const chainList = Object.keys(chainsData);
+        fs.writeFileSync(CHAIN_LIST_FILE_PATH, JSON.stringify(chainList, null, 2));
+        
+        for (const [chainName, chainData] of Object.entries(chainsData)) {
+            const chainFilePath = path.join(DATA_DIR, `${chainName}.json`);
+            fs.writeFileSync(chainFilePath, JSON.stringify(chainData, null, 2));
+        }
+        
         logger.info('Chains data saved.');
-    }
-    catch (error) {
-        logger.error('Error writing chains file:', error);
+    } catch (error) {
+        logger.error('Error writing chains data:', error);
     }
 }
 
