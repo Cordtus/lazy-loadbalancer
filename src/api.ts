@@ -1,4 +1,3 @@
-// api.ts
 import express, { Request, Response } from 'express';
 import { crawlNetwork, crawlAllChains } from './crawler.js';
 import { updateSingleChain, fetchChains } from './fetchChains.js';
@@ -63,6 +62,31 @@ router.post('/update-all-chains', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Error updating all chains:', error);
     res.status(500).json({ error: 'Failed to update all chains' });
+  }
+});
+
+// Crawl a specific chain
+router.post('/crawl-chain/:chainName', async (req: Request, res: Response) => {
+  const chainName = req.params.chainName;
+  const chainsData = loadChainsData();
+  const initialRpcUrls = chainsData[chainName]?.['rpc-addresses'] || [];
+  try {
+    const updated = await crawlNetwork(chainName, initialRpcUrls);
+    res.json({ message: `Chain ${chainName} successfully crawled`, ...updated });
+  } catch (error) {
+    logger.error(`Error crawling chain ${chainName}:`, error);
+    res.status(500).json({ error: `Failed to crawl chain ${chainName}` });
+  }
+});
+
+// Crawl all chains
+router.post('/crawl-all-chains', async (req: Request, res: Response) => {
+  try {
+    const results = await crawlAllChains();
+    res.json({ message: 'All chains crawled successfully', results });
+  } catch (error) {
+    logger.error('Error crawling all chains:', error);
+    res.status(500).json({ error: 'Failed to crawl all chains' });
   }
 });
 
