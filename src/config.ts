@@ -1,8 +1,9 @@
+// config.ts
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-export default {
+const config = {
   port: process.env.PORT || 3000,
   requestTimeout: 12000,
   github: {
@@ -25,3 +26,7 @@ export default {
     app: 'info'
   }
 };
+
+console.log('Config loaded:', config);
+
+export default config;

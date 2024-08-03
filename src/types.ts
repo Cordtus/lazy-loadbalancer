@@ -1,3 +1,4 @@
+// types.ts
 export interface ChainEntry {
   chain_name: string;
   'chain-id': string;

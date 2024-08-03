@@ -1,10 +1,11 @@
-import { Octokit } from "@octokit/core";
+// fetchCHains.ts
 import dotenv from "dotenv";
 import fetch from "node-fetch";
-import { ChainEntry, ChainData } from "./types";
-import { ensureFilesExist, loadChainsData, saveChainsData } from './utils.js';
-import { crawlerLogger as logger } from './logger.js';
 import config from './config.js';
+import { Octokit } from "@octokit/core";
+import { ChainEntry, ChainData } from "./types";
+import { crawlerLogger as logger } from './logger.js';
+import { ensureFilesExist, loadChainsData, saveChainsData } from './utils.js';
 
 dotenv.config();
 

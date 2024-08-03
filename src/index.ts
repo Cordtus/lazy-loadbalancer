@@ -1,3 +1,4 @@
+// index.ts
 import { fetchChains } from './fetchChains.js';
 import { startBalancer } from './balancer.js';
 import { appLogger as logger } from './logger.js';

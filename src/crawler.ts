@@ -1,3 +1,4 @@
+// crawler.ts
 import { differenceInSeconds, parseISO } from 'date-fns';
 import fetch, { Response as FetchResponse } from 'node-fetch';
 import { ChainEntry, NetInfo, StatusInfo, StatusResponse, Peer, BlacklistedIP } from './types';

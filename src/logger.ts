@@ -1,3 +1,4 @@
+// logger.ts
 import winston from 'winston';
 import 'winston-daily-rotate-file';
 import path from 'path';
@@ -26,7 +27,6 @@ const createLogger = (filename: string, level: string) => {
         maxSize: '20m',
         maxFiles: '14d'
       }),
-      // Add console transport here instead of adding it separately
       new winston.transports.Console({
         format: winston.format.combine(
           winston.format.colorize(),
@@ -39,11 +39,7 @@ const createLogger = (filename: string, level: string) => {
   return logger;
 };
 
-// Ensure debug level is set for all loggers
-config.logging.balancer = 'debug';
-config.logging.crawler = 'debug';
-config.logging.app = 'debug';
-
+// Use the levels from the config file
 export const balancerLogger = createLogger('balancer', config.logging.balancer);
 export const crawlerLogger = createLogger('crawler', config.logging.crawler);
 export const appLogger = createLogger('app', config.logging.app);
