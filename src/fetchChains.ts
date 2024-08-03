@@ -1,10 +1,11 @@
+// fetchCHains.ts
 import { Octokit } from "@octokit/core";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
 import { ChainEntry, ChainData } from "./types";
-import { ensureFilesExist, logToFile, saveChainsData } from './utils.js';
+import { ensureFilesExist, loadChainsData, saveChainsData } from './utils.js';
 import { crawlerLogger as logger } from './logger.js';
-import config from './config.js';
+import config, { REPO_NAME, REPO_OWNER } from './config.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -14,11 +15,10 @@ const octokit = new Octokit({
   auth: process.env.GITHUB_PAT,
 });
 
-const REPO_OWNER = "cosmos";
-const REPO_NAME = "chain-registry";
 const DATA_DIR = path.join(process.cwd(), 'data');
 
 async function fetchChainData(chain: string): Promise<ChainEntry | null> {
+
   const url = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/${chain}/chain.json`;
   logger.debug(`Fetching chain data from URL: ${url}`);
 
@@ -53,7 +53,7 @@ async function fetchChainData(chain: string): Promise<ChainEntry | null> {
   }
 }
 
-export async function fetchChains() {
+export async function fetchChains(forceUpdate = false) {
   ensureFilesExist();
 
   try {
@@ -63,8 +63,9 @@ export async function fetchChains() {
       repo: config.github.repo,
     });
 
-    const chainsData: { [key: string]: ChainEntry } = {};
-    const chainList: string[] = [];
+    const existingChainsData = loadChainsData();
+    const now = Date.now();
+    const updateInterval = config.chains.checkInterval;
 
     if (Array.isArray(response.data)) {
       for (const item of response.data) {
@@ -74,24 +75,41 @@ export async function fetchChains() {
           !item.name.startsWith("_") &&
           item.name !== "testnets"
         ) {
-          const chainData = await fetchChainData(item.name);
-          if (chainData) {
-            chainsData[item.name] = chainData;
-            chainList.push(item.name);
+          const existingChainEntry = existingChainsData[item.name];
+          if (forceUpdate || !existingChainEntry || !existingChainEntry.timestamp || now - existingChainEntry.timestamp > updateInterval) {
+            const chainData = await fetchChainData(item.name);
+            if (chainData) {
+              existingChainsData[item.name] = chainData;
+              logger.info(`Fetched and saved data for chain: ${item.name}`);
+            }
+          } else {
+            logger.info(`Chain ${item.name} data is up to date.`);
           }
         }
       }
     }
 
-    // Save the list of all chains
-    const chainListPath = path.join(DATA_DIR, 'chain_list.json');
-    fs.writeFileSync(chainListPath, JSON.stringify(chainList, null, 2));
-    logger.info(`Chain list saved: ${chainList.length} chains`);
-
-    // We don't need to save all chains in a single file anymore
-    // saveChainsData(chainsData);
+    saveChainsData(existingChainsData);
+    logger.info(`Chains data saved`);
   } catch (error) {
     logger.error("Error fetching chains data:", error);
+  }
+}
+
+export async function updateSingleChain(chainName: string): Promise<boolean> {
+  try {
+    const chainData = await fetchChainData(chainName);
+    if (chainData) {
+      const chainsData = loadChainsData();
+      chainsData[chainName] = chainData;
+      saveChainsData(chainsData);
+      logger.info(`Updated data for chain: ${chainName}`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    logger.error(`Error updating chain ${chainName}:`, error);
+    return false;
   }
 }
 

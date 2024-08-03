@@ -92,11 +92,13 @@ async function proxyRequestHttp2(chain: string, req: Request, res: Response): Pr
   const url = new URL(rpcAddress);
   const session = await getHttp2Session(url);
 
-  const stream = session.request({
+  const headers = {
     ':method': req.method,
     ':path': url.pathname + url.search,
     ...req.headers,
-  });
+  };
+
+  const stream = session.request(headers);
 
   stream.on('response', (headers) => {
     res.writeHead(headers[':status'] as number, headers);
@@ -110,7 +112,7 @@ async function proxyRequestHttp2(chain: string, req: Request, res: Response): Pr
     res.end();
   });
 
-  if (req.body) {
+  if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
     stream.end(JSON.stringify(req.body));
   } else {
     stream.end();
@@ -146,10 +148,14 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
               .filter(([key]) => !['host', 'content-length'].includes(key.toLowerCase()))
           ),
         },
-        body: JSON.stringify(req.body),
         signal: AbortSignal.timeout(config.requestTimeout),
         agent: url.protocol === 'https:' ? httpsAgent : httpAgent,
       };
+
+      // Only add body for POST, PUT, PATCH requests
+      if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+        fetchOptions.body = JSON.stringify(req.body);
+      }
 
       const startTime = Date.now();
       const response = await fetch(url.href, fetchOptions);

@@ -1,6 +1,7 @@
 // api.ts
 import express, { Request, Response } from 'express';
 import { crawlNetwork, crawlAllChains } from './crawler.js';
+import { updateSingleChain, fetchChains } from './fetchChains.js';
 import { loadChainsData, saveChainsData, cleanupBlacklist } from './utils.js';
 import { appLogger as logger } from './logger.js';
 const router = express.Router();
@@ -41,15 +42,13 @@ router.get('/rpc-list/:chainName', (req: Request, res: Response) => {
 // Update data for a specific chain
 router.post('/update-chain/:chainName', async (req: Request, res: Response) => {
   const chainName = req.params.chainName;
-  const chainsData = loadChainsData();
-  if (!chainsData[chainName]) {
-    return res.status(404).json({ error: `Chain ${chainName} not found` });
-  }
-  
   try {
-    logger.info(`Updating chain: ${chainName}`);
-    const result = await crawlNetwork(chainName, chainsData[chainName]['rpc-addresses']);
-    res.json(result);
+    const updated = await updateSingleChain(chainName);
+    if (updated) {
+      res.json({ message: `Chain ${chainName} updated successfully` });
+    } else {
+      res.status(404).json({ error: `Chain ${chainName} not found or update failed` });
+    }
   } catch (error) {
     logger.error(`Error updating chain ${chainName}:`, error);
     res.status(500).json({ error: `Failed to update chain ${chainName}` });
@@ -59,9 +58,8 @@ router.post('/update-chain/:chainName', async (req: Request, res: Response) => {
 // Update data for all chains
 router.post('/update-all-chains', async (req: Request, res: Response) => {
   try {
-    logger.info('Updating all chains');
-    const results = await crawlAllChains();
-    res.json(results);
+    await fetchChains(true); // Force update all chains
+    res.json({ message: 'All chains updated successfully' });
   } catch (error) {
     logger.error('Error updating all chains:', error);
     res.status(500).json({ error: 'Failed to update all chains' });

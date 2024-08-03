@@ -4,6 +4,7 @@ import path from 'path';
 import { URL, fileURLToPath } from 'url';
 import { appLogger as logger } from './logger.js';
 import { ChainEntry, BlacklistedIP } from './types.js';
+import config from './config.js';
 
 export function getDirName(metaUrl: string | URL) {
     const __filename = fileURLToPath(metaUrl);
@@ -67,11 +68,16 @@ export function loadChainsData(): Record<string, ChainEntry> {
     try {
         const chainList = JSON.parse(fs.readFileSync(CHAIN_LIST_FILE_PATH, 'utf-8')) as string[];
         const chainsData: Record<string, ChainEntry> = {};
+        const now = Date.now();
+        const updateInterval = config.chains.checkInterval;
         
         for (const chainName of chainList) {
             const chainFilePath = path.join(DATA_DIR, `${chainName}.json`);
             if (fs.existsSync(chainFilePath)) {
                 const chainData = JSON.parse(fs.readFileSync(chainFilePath, 'utf-8')) as ChainEntry;
+                if (!chainData.timestamp || now - chainData.timestamp > updateInterval) {
+                    logger.info(`Chain ${chainName} data is outdated and needs updating.`);
+                }
                 chainsData[chainName] = chainData;
             }
         }
