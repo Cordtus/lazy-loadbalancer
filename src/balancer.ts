@@ -126,6 +126,9 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
   while (attempts < maxAttempts) {
     const rpcAddress = selectNextRPC(chain);
     const url = new URL(rpcAddress);
+    
+    // Always append '/status' to the RPC URL
+    url.pathname = url.pathname.replace(/\/?$/, '/') + 'status';
 
     if (!circuitBreakers[rpcAddress]) {
       circuitBreakers[rpcAddress] = new CircuitBreaker();
@@ -140,22 +143,13 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
 
     try {
       const fetchOptions: RequestInit = {
-        method: req.method,
+        method: 'GET',  // Always use GET for /status
         headers: {
           'Content-Type': 'application/json',
-          ...Object.fromEntries(
-            Object.entries(req.headers)
-              .filter(([key]) => !['host', 'content-length'].includes(key.toLowerCase()))
-          ),
         },
         signal: AbortSignal.timeout(config.requestTimeout),
         agent: url.protocol === 'https:' ? httpsAgent : httpAgent,
       };
-
-      // Only add body for POST, PUT, PATCH requests
-      if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
-        fetchOptions.body = JSON.stringify(req.body);
-      }
 
       const startTime = Date.now();
       const response = await fetch(url.href, fetchOptions);
