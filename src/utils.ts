@@ -9,6 +9,7 @@ export function getDirName(metaUrl: string | URL) {
     return path.dirname(__filename);
 }
 
+const PORTS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/ports.json');
 const CHAINS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/chains.json');
 const REJECTED_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/rejected_ips.json');
 const GOOD_IPS_FILE_PATH = path.resolve(getDirName(import.meta.url), '../data/good_ips.json');
@@ -33,6 +34,29 @@ export function ensureFilesExist() {
     }
     if (!fs.existsSync(BLACKLISTED_IPS_FILE_PATH)) {
         fs.writeFileSync(BLACKLISTED_IPS_FILE_PATH, JSON.stringify([]));
+    }
+}
+
+export function loadPorts(): number[] {
+    ensureFilesExist();
+    try {
+        const data = fs.readFileSync(PORTS_FILE_PATH, 'utf-8');
+        return JSON.parse(data);
+    } catch (error) {
+        logger.error('Error reading ports file:', error);
+        return [80, 443, 26657]; // Default ports
+    }
+}
+
+export function savePorts(ports: number[]): void {
+    if (!fs.existsSync(path.dirname(PORTS_FILE_PATH))) {
+        fs.mkdirSync(path.dirname(PORTS_FILE_PATH), { recursive: true });
+    }
+    try {
+        fs.writeFileSync(PORTS_FILE_PATH, JSON.stringify(ports, null, 2));
+        logger.info('Ports saved.');
+    } catch (error) {
+        logger.error('Error writing ports file:', error);
     }
 }
 

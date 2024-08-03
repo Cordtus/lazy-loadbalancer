@@ -10,6 +10,7 @@ import { requestLogger } from './requestLogger.js';
 import { errorHandler } from './errorHandler.js';
 import NodeCache from 'node-cache';
 import http2 from 'http2';
+import { CircuitBreaker } from './circuitBreaker.js';
 
 const app = express();
 const PORT = config.port;
@@ -73,8 +74,6 @@ function selectNextRPC(chain: string): string {
   }
   return loadBalancers[chain].selectNextEndpoint();
 }
-
-import { CircuitBreaker } from './circuitBreaker.js';
 
 const circuitBreakers: Record<string, CircuitBreaker> = {};
 const http2Sessions: Record<string, http2.ClientHttp2Session> = {};
@@ -272,8 +271,15 @@ app.all('/lb/:chain', async (req: Request, res: Response) => {
   }
 });
 
+export function startBalancer() {
+  const app = express();
+  const PORT = config.port;
+
 app.use(errorHandler);
 
 app.listen(PORT, () => {
   logger.info(`Load balancer running at http://localhost:${PORT}`);
 });
+}
+
+export { proxyRequestWithCaching, selectNextRPC };

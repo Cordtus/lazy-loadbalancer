@@ -2,7 +2,6 @@ import express, { Request, Response } from 'express';
 import { crawlNetwork, crawlAllChains } from './crawler.js';
 import { loadChainsData, saveChainsData, cleanupBlacklist } from './utils.js';
 import { appLogger as logger } from './logger.js';
-import { ChainEntry } from './types.js';
 const router = express.Router();
 
 // Get a list of all chains
@@ -24,12 +23,17 @@ router.get('/chains-summary', (req: Request, res: Response) => {
 
 // Get endpoints for a specific chain
 router.get('/rpc-list/:chainName', (req: Request, res: Response) => {
+  const { chainName } = req.params;
   const chainsData = loadChainsData();
-  const chainName = req.params.chainName;
-  if (chainsData[chainName]) {
-    res.json(chainsData[chainName]['rpc-addresses']);
+  const chainData = chainsData[chainName];
+  if (chainData) {
+    res.json({
+      chainName,
+      rpcCount: chainData['rpc-addresses'].length,
+      rpcList: chainData['rpc-addresses']
+    });
   } else {
-    res.status(404).json({ error: `Chain ${chainName} not found` });
+    res.status(404).send(`Chain ${chainName} not found.`);
   }
 });
 

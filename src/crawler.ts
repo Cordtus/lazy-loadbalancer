@@ -1,18 +1,27 @@
 import { differenceInSeconds, parseISO } from 'date-fns';
 import fetch, { Response as FetchResponse } from 'node-fetch';
 import { ChainEntry, NetInfo, StatusInfo, StatusResponse, Peer, BlacklistedIP } from './types';
-import { loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, loadGoodIPs, saveGoodIPs, loadBlacklistedIPs, saveBlacklistedIPs } from './utils.js';
+import { loadChainsData, saveChainsData, loadRejectedIPs, saveRejectedIPs, loadGoodIPs, saveGoodIPs, loadBlacklistedIPs, saveBlacklistedIPs, loadPorts, savePorts } from './utils.js';
 import config from './config.js';
 import dns from 'dns';
 import pLimit from 'p-limit';
 import { promisify } from 'util';
 import { crawlerLogger as logger } from './logger.js';
+import { CircuitBreaker } from './circuitBreaker.js';
 
 const ping = promisify(dns.lookup);
 
-const COMMON_PORTS = [443, 26657, 36657, 22257, 14657, 58657, 33657, 53657, 37657, 31657, 10157, 27957, 2401, 15957, 80, 8080, 8000];
 const MAX_FAILURES = 10;
 const BLACKLIST_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+
+function isValidUrl(url: string): boolean {
+  try {
+    new URL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function fetchWithTimeout(url: string): Promise<FetchResponse> {
   const controller = new AbortController();
@@ -41,22 +50,10 @@ function normalizeUrl(url: string): string | null {
       parsedUrl.hostname = parts[0];
       parsedUrl.pathname = '/' + parts.slice(1).join('/') + parsedUrl.pathname;
     }
-    if (!parsedUrl.port && !COMMON_PORTS.includes(parseInt(parsedUrl.port))) {
-      parsedUrl.port = '';
-    }
     return parsedUrl.toString().replace(/\/$/, '');
   } catch (error) {
     logger.error(`Failed to normalize URL: ${url}`, error);
     return null;
-  }
-}
-
-async function isSecure(url: string): Promise<boolean> {
-  try {
-    await fetch(`https://${url}/status`);
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -72,30 +69,54 @@ async function fetchNetInfo(url: string): Promise<NetInfo | null> {
   }
 }
 
+function isPrivateIP(ip: string): boolean {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return false;
+  const firstOctet = parseInt(parts[0], 10);
+  const secondOctet = parseInt(parts[1], 10);
+  return (
+    firstOctet === 10 ||
+    (firstOctet === 172 && secondOctet >= 16 && secondOctet <= 31) ||
+    (firstOctet === 192 && secondOctet === 168)
+  );
+}
+
 function extractPeerInfo(peers: Peer[]): string[] {
-  return peers.flatMap(peer => {
-    const ips = [
+  const ports = loadPorts();
+  const newPorts: number[] = [];
+  const peerAddresses: string[] = [];
+
+  peers.forEach(peer => {
+    const extractIPAndPort = (address: string): { ip: string; port: string } => {
+      const [ip, port] = address.split(':');
+      return { ip, port };
+    };
+
+    const addresses = [
       peer.node_info.listen_addr,
-      peer.remote_ip,
-      peer.node_info.other.rpc_address
-    ]
-    .map(ip => {
-      if (ip.startsWith('tcp://')) {
-        return ip.replace('tcp://', 'http://');
+      peer.node_info.other.rpc_address,
+      peer.remote_ip
+    ].filter(Boolean);
+
+    addresses.forEach(address => {
+      const { ip, port } = extractIPAndPort(address);
+      if (ip && !isPrivateIP(ip) && ip !== 'localhost' && ip !== '0.0.0.0') {
+        const normalizedPort = port || '26657';
+        if (!ports.includes(parseInt(normalizedPort))) {
+          newPorts.push(parseInt(normalizedPort));
+        }
+        peerAddresses.push(`${ip}:${normalizedPort}`);
       }
-      return ip;
-    })
-    .filter(ip => 
-      ip && 
-      !ip.includes('127.0.0.1') && 
-      !ip.includes('0.0.0.0') && 
-      !ip.includes('[') // Exclude IPv6
-    )
-    .map(normalizeUrl)
-    .filter((ip): ip is string => ip !== null);
-    
-    return [...new Set(ips)]; // Remove duplicates
+    });
   });
+
+  // Update ports.json with newly discovered ports
+  if (newPorts.length > 0) {
+    ports.push(...newPorts);
+    savePorts(ports);
+  }
+
+  return [...new Set(peerAddresses)]; // Remove duplicates
 }
 
 async function checkEndpoint(url: string, expectedChainId: string): Promise<{ isValid: boolean; actualChainId: string | null; url: string; peers: string[] }> {
@@ -106,7 +127,7 @@ async function checkEndpoint(url: string, expectedChainId: string): Promise<{ is
   }
 
   const parsedUrl = new URL(normalizedUrl);
-  const isHttps = parsedUrl.protocol === 'https:' || parsedUrl.port === '443' || !parsedUrl.port;
+  const isHttps = parsedUrl.protocol === 'https:' || parsedUrl.port === '443';
 
   try {
     logger.debug(`Checking endpoint: ${normalizedUrl}`);
@@ -152,6 +173,56 @@ async function checkEndpoint(url: string, expectedChainId: string): Promise<{ is
   }
 }
 
+async function checkPeerEndpoints(peerAddresses: string[], expectedChainId: string): Promise<string[]> {
+  const validEndpoints: string[] = [];
+  const ports = loadPorts();
+  const limit = pLimit(10); // Limit concurrent requests
+
+  const domainChecks = peerAddresses.filter(addr => !addr.match(/^\d+\.\d+\.\d+\.\d+/));
+  const ipChecks = peerAddresses.filter(addr => addr.match(/^\d+\.\d+\.\d+\.\d+/));
+
+  const checkEndpointWithProtocolAndPort = async (address: string, protocol: string, port: number) => {
+    const url = `${protocol}://${address.split(':')[0]}:${port}/status`;
+    try {
+      const response = await fetchWithTimeout(url);
+      if (response.ok) {
+        const data = await response.json() as StatusResponse;
+        if (data.result.node_info.network === expectedChainId) {
+          validEndpoints.push(url.replace('/status', ''));
+          return true;
+        }
+      }
+    } catch (error) {
+      // Ignore errors
+    }
+    return false;
+  };
+
+  const checkSequence = async (addresses: string[], isIp: boolean) => {
+    for (const address of addresses) {
+      // Check with https and port 443
+      if (await limit(() => checkEndpointWithProtocolAndPort(address, 'https', 443))) continue;
+
+      // Check with https and port 26657, then http and 26657
+      if (await limit(() => checkEndpointWithProtocolAndPort(address, 'https', 26657))) continue;
+      if (await limit(() => checkEndpointWithProtocolAndPort(address, 'http', 26657))) continue;
+
+      // Check remaining ports
+      for (const port of ports) {
+        if (port !== 443 && port !== 26657) {
+          const protocol = isIp ? 'http' : 'https';
+          if (await limit(() => checkEndpointWithProtocolAndPort(address, protocol, port))) break;
+        }
+      }
+    }
+  };
+
+  await checkSequence(domainChecks, false);
+  await checkSequence(ipChecks, true);
+
+  return validEndpoints;
+}
+
 export async function crawlNetwork(chainName: string, initialRpcUrls: string[]): Promise<{
   newEndpoints: number,
   totalEndpoints: number,
@@ -179,6 +250,7 @@ export async function crawlNetwork(chainName: string, initialRpcUrls: string[]):
 
   const limit = pLimit(5); // Limit concurrent requests
   const processedUrls = new Set<string>();
+  const circuitBreakers: Record<string, CircuitBreaker> = {};
 
   try {
     while ((urlsToCheck.size > 0 || discoveredPeers.size > 0) && (Date.now() - startTime < timeLimit)) {
@@ -188,13 +260,22 @@ export async function crawlNetwork(chainName: string, initialRpcUrls: string[]):
       discoveredPeers = new Set([...discoveredPeers].filter(url => !currentBatch.includes(url)));
 
       const checkPromises = currentBatch.map(url => 
-        limit(() => checkEndpoint(url, expectedChainId))
+        limit(() => {
+          if (!circuitBreakers[url]) {
+            circuitBreakers[url] = new CircuitBreaker();
+          }
+          if (circuitBreakers[url].isOpen()) {
+            return { isValid: false, actualChainId: null, url, peers: [] };
+          }
+          return checkEndpoint(url, expectedChainId);
+        })
       );
 
       const results = await Promise.all(checkPromises);
 
       for (const result of results) {
         if (result.isValid) {
+          circuitBreakers[result.url].recordSuccess();
           if (result.actualChainId === expectedChainId) {
             if (!chainsData[chainName]['rpc-addresses'].includes(result.url)) {
               chainsData[chainName]['rpc-addresses'].push(result.url);
@@ -211,17 +292,14 @@ export async function crawlNetwork(chainName: string, initialRpcUrls: string[]):
           }
 
           // Process discovered peers
-          for (const peer of result.peers) {
-            const peerUrl = new URL(peer);
-            if (!checkedUrls.has(peer) && !rejectedIPs.has(peerUrl.hostname) && !blacklistedIPs.some(item => item.ip === peerUrl.hostname)) {
-              if (peerUrl.protocol === 'https:' || peerUrl.port === '443') {
-                discoveredPeers.add(peer);
-              } else {
-                discoveredPeers.add(`http://${peerUrl.hostname}:${peerUrl.port || '26657'}`);
-              }
+          const validPeerEndpoints = await checkPeerEndpoints(result.peers, expectedChainId);
+          for (const peerEndpoint of validPeerEndpoints) {
+            if (!checkedUrls.has(peerEndpoint)) {
+              discoveredPeers.add(peerEndpoint);
             }
           }
         } else {
+          circuitBreakers[result.url].recordFailure();
           const hostname = new URL(result.url).hostname;
           const blacklistedEntry = blacklistedIPs.find(item => item.ip === hostname);
           if (blacklistedEntry) {
@@ -292,22 +370,4 @@ export async function crawlAllChains(): Promise<Record<string, { newEndpoints: n
 
   logger.info('Finished crawling all chains');
   return results;
-}
-
-function isValidUrl(url: string): boolean {
-  try {
-    new URL(url);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function cleanupBlacklist(): void {
-  const now = Date.now();
-  const blacklistedIPs = loadBlacklistedIPs();
-  const updatedBlacklist = blacklistedIPs.filter(entry => 
-    now - entry.timestamp < BLACKLIST_TIMEOUT || entry.failureCount < MAX_FAILURES
-  );
-  saveBlacklistedIPs(updatedBlacklist);
 }
