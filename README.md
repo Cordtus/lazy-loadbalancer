@@ -44,7 +44,7 @@ It is intended as a personal load balancer / unified endpoint for multiple Cosmo
 
 ### Chain Management
 
-1. Update data for all chains from the registry:
+1. Update data for all chains:
    ```bash
    curl -X POST http://localhost:3000/api/update-all-chains
    ```
@@ -54,14 +54,21 @@ It is intended as a personal load balancer / unified endpoint for multiple Cosmo
    curl -X POST http://localhost:3000/api/update-chain/osmosis
    ```
 
-3. Crawl all chains to discover new RPC endpoints:
+3. Manually trigger blacklist cleanup:
    ```bash
-   curl -X POST http://localhost:3000/api/crawl-all-chains
+   curl -X POST http://localhost:3000/api/cleanup-blacklist
    ```
 
-4. Crawl a specific chain:
+4. Add a new chain:
    ```bash
-   curl -X POST http://localhost:3000/api/crawl-chain/osmosis
+   curl -X POST http://localhost:3000/api/add-chain \
+   -H "Content-Type: application/json" \
+   -d '{"chainName": "newchain", "chainId": "newchain-1", "rpcAddresses": ["http://rpc1.newchain.com", "http://rpc2.newchain.com"], "bech32Prefix": "new", "accountPrefix": "new"}'
+   ```
+
+5. Remove a chain:
+   ```bash
+   curl -X DELETE http://localhost:3000/api/remove-chain/chainname
    ```
 
 ### Chain Information
@@ -106,7 +113,7 @@ Logs are stored in the `./logs` directory, with separate files for each module (
 - `src/`: Source code
   - `balancer.ts`: Main load balancing logic
   - `crawler.ts`: Network crawling and endpoint discovery
-  - `api.ts`: Custom API endpoints for chain management
+  - `api.ts`: API endpoints for chain management and information
   - `fetchChains.ts`: Functions for fetching chain data from the registry
   - `utils.ts`: Utility functions
   - `types.ts`: TypeScript type definitions

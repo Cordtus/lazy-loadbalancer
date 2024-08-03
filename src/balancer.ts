@@ -1,5 +1,5 @@
 // balancer.ts
-import express, { Request, Response } from 'express';
+import express, { Express, Request, Response } from 'express';
 import { loadChainsData } from './utils.js';
 import { balancerLogger as logger } from './logger.js';
 import config from './config.js';
@@ -218,7 +218,7 @@ async function proxyRequestWithRetry(chain: string, req: Request, res: Response)
   }
 }
 
-export async function proxyRequestWithCaching(chain: string, req: Request, res: Response): Promise<void> {
+async function proxyRequestWithCaching(chain: string, req: Request, res: Response): Promise<void> {
   const cacheKey = `${chain}:${req.method}:${req.url}:${JSON.stringify(req.body)}`;
   const cachedResponse = cache.get(cacheKey);
 
@@ -238,14 +238,14 @@ export async function proxyRequestWithCaching(chain: string, req: Request, res: 
   await proxyRequestWithRetry(chain, req, res);
 }
 
-export function startBalancer() {
-  const app = express();
+export function startBalancer(app: Express) {
   const PORT = config.port;
+  const chainsData: Record<string, ChainEntry> = loadChainsData();
 
   app.use(express.json());
   app.use(requestLogger);
 
-  app.all('/lb/:chain', async (req: Request, res: Response) => {
+  app.all('/lb/:chain/*', async (req: Request, res: Response) => {
     const { chain } = req.params;
 
     logger.debug(`Received ${req.method} request for chain: ${chain}`);
@@ -269,3 +269,6 @@ export function startBalancer() {
     logger.info(`Load balancer running at http://localhost:${PORT}`);
   });
 }
+
+export { proxyRequestWithCaching };
+
