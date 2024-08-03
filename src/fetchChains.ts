@@ -2,11 +2,9 @@ import { Octokit } from "@octokit/core";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
 import { ChainEntry, ChainData } from "./types";
-import { ensureFilesExist, loadChainsData, logToFile, saveChainsData } from './utils.js';
-import { appLogger as logger } from './logger.js';
+import { ensureFilesExist, loadChainsData, saveChainsData } from './utils.js';
+import { crawlerLogger as logger } from './logger.js';
 import config from './config.js';
-import fs from 'fs';
-import path from 'path';
 
 dotenv.config();
 
@@ -19,17 +17,14 @@ const REPO_NAME = "chain-registry";
 const UPDATE_INTERVAL = 7 * 24 * 60 * 60 * 1000; // 7 days
 const CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
-const logModuleName = 'fetchChains';
-
 async function fetchChainData(chain: string): Promise<ChainEntry | null> {
   const url = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/${chain}/chain.json`;
-  logToFile(logModuleName, `Fetching chain data from URL: ${url}`);
+  logger.debug(`Fetching chain data from URL: ${url}`);
 
   try {
     const response = await fetch(url);
     if (!response.ok) {
-      console.error(`Failed to fetch data for chain: ${chain}`);
-      logToFile(logModuleName, `Failed to fetch data for chain: ${chain}`);
+      logger.error(`Failed to fetch data for chain: ${chain}`);
       return null;
     }
 
@@ -45,13 +40,12 @@ async function fetchChainData(chain: string): Promise<ChainEntry | null> {
       timestamp: Date.now(),
     };
   } catch (error) {
-    console.error(`Error fetching data for chain ${chain}:`, error);
-    logToFile(logModuleName, `Error fetching data for chain ${chain}: ${error}`);
+    logger.error(`Error fetching data for chain ${chain}:`, error);
     return null;
   }
 }
 
-async function fetchChains() {
+export async function fetchChains() {
   ensureFilesExist();
 
   try {
@@ -61,7 +55,7 @@ async function fetchChains() {
       repo: config.github.repo,
     });
 
-    const chainsData: { [key: string]: ChainEntry } = {};
+    const chainsData: { [key: string]: ChainEntry } = loadChainsData();
     const now = Date.now();
 
     if (Array.isArray(response.data)) {
@@ -72,31 +66,26 @@ async function fetchChains() {
           !item.name.startsWith("_") &&
           item.name !== "testnets"
         ) {
-          const chainData = await fetchChainData(item.name);
-          if (chainData) {
-            chainsData[item.name] = chainData;
-            // Save individual chain file
-            const chainFilePath = path.join(process.cwd(), 'data', `${item.name}.json`);
-            fs.writeFileSync(chainFilePath, JSON.stringify(chainData, null, 2));
-            logger.info(`Fetched and saved data for chain: ${item.name}`);
+          const chainEntry = chainsData[item.name];
+          if (!chainEntry || !chainEntry.timestamp || now - chainEntry.timestamp > config.chains.checkInterval) {
+            const chainData = await fetchChainData(item.name);
+            if (chainData) {
+              chainsData[item.name] = chainData;
+              logger.info(`Fetched and saved data for chain: ${item.name}`);
+            }
           }
         }
       }
     }
 
-    // Save the list of all chains
-    const chainListPath = path.join(process.cwd(), 'data', 'chain_list.json');
-    fs.writeFileSync(chainListPath, JSON.stringify(Object.keys(chainsData), null, 2));
-    logger.info(`Chain list saved: ${Object.keys(chainsData).length} chains`);
-
-    // We don't need to save all chains in a single file anymore
-    // saveChainsData(chainsData);
+    saveChainsData(chainsData);
+    logger.info(`Chains data saved`);
   } catch (error) {
     logger.error("Error fetching chains data:", error);
   }
 }
 
-function checkAndUpdateChains() {
+export function checkAndUpdateChains() {
   const chainsData: { [key: string]: ChainEntry } = loadChainsData();
 
   const now = Date.now();
@@ -106,20 +95,20 @@ function checkAndUpdateChains() {
       const updatedChainData = await fetchChainData(chain);
       if (updatedChainData) {
         chainsData[chain] = updatedChainData;
-        logToFile(logModuleName, `Updated data for chain: ${chain}`);
+        logger.info(`Updated data for chain: ${chain}`);
       }
     }
   });
 
   Promise.all(promises).then(() => {
     saveChainsData(chainsData);
-    console.log("Chains data updated.");
-    logToFile(logModuleName, "Chains data updated.");
+    logger.info("Chains data updated.");
   });
 }
 
-fetchChains().then(() => {
-  setInterval(checkAndUpdateChains, UPDATE_INTERVAL);
-});
+// Remove the immediate invocation of fetchChains
+// fetchChains().then(() => {
+//   setInterval(checkAndUpdateChains, UPDATE_INTERVAL);
+// });
 
-export { fetchChainData, checkAndUpdateChains, fetchChains };
+export { fetchChainData };

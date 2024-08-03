@@ -26,16 +26,15 @@ const createLogger = (filename: string, level: string) => {
         maxSize: '20m',
         maxFiles: '14d'
       }),
+      // Add console transport here instead of adding it separately
+      new winston.transports.Console({
+        format: winston.format.combine(
+          winston.format.colorize(),
+          winston.format.simple()
+        )
+      })
     ],
   });
-
-  // Add console transport
-  logger.add(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.simple()
-    )
-  }));
 
   return logger;
 };
