@@ -10,7 +10,7 @@ It is intended as a personal load balancer / unified endpoint for multiple Cosmo
 ## Prerequisites
 
 - Node.js (v14 or later)
-- Yarn package manager
+- npm or Yarn package manager
 
 ## Setup
 
@@ -22,6 +22,8 @@ It is intended as a personal load balancer / unified endpoint for multiple Cosmo
 
 2. Install dependencies:
    ```bash
+   npm install
+   # or
    yarn install
    ```
 
@@ -30,15 +32,37 @@ It is intended as a personal load balancer / unified endpoint for multiple Cosmo
    echo "GITHUB_PAT=your_github_personal_access_token" > .env
    ```
 
-4. Build the project:
+4. Create necessary directories:
    ```bash
+   mkdir -p data logs
+   ```
+
+5. Build the project:
+   ```bash
+   npm run build
+   # or
    yarn build
    ```
 
-5. Start the Node.js server:
+6. Start the Node.js server:
    ```bash
+   npm start
+   # or
    yarn start
    ```
+
+### Configuration
+
+The application behavior can be configured by modifying the `config.js` file in the `src` directory. This includes settings for:
+
+- Port number
+- Request timeout
+- GitHub repository details for chain registry
+- Chain update intervals
+- Crawler settings
+- Logging levels
+
+Make sure to rebuild the project after any changes to the configuration.
 
 ## Usage
 
@@ -106,7 +130,7 @@ The load balancer will automatically select an available RPC endpoint for the sp
 
 ## Logging
 
-Logs are stored in the `./logs` directory, with separate files for each module (balancer, crawler, api).
+Logs are stored in the `./logs` directory, with separate files for each module (balancer, crawler, app). The log level can be configured in the `config.js` file.
 
 ## Directory Structure
 
@@ -118,7 +142,9 @@ Logs are stored in the `./logs` directory, with separate files for each module (
   - `utils.ts`: Utility functions
   - `types.ts`: TypeScript type definitions
   - `logger.ts`: Logging configuration
-- `data/`: JSON files for chain data and IP lists
+- `data/`: JSON files for individual chain data and chain list
+  - `chain_list.json`: List of all available chains
+  - `[chain-name].json`: Individual chain data files
 - `logs/`: Log files
 
 ## Contributing
