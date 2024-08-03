@@ -12,9 +12,6 @@ import NodeCache from 'node-cache';
 import http2 from 'http2';
 import { CircuitBreaker } from './circuitBreaker.js';
 
-const app = express();
-const PORT = config.port;
-
 const chainsData: Record<string, ChainEntry> = loadChainsData();
 const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
 
@@ -67,16 +64,15 @@ class WeightedRoundRobin {
 }
 
 const loadBalancers: Record<string, WeightedRoundRobin> = {};
+const circuitBreakers: Record<string, CircuitBreaker> = {};
+const http2Sessions: Record<string, http2.ClientHttp2Session> = {};
 
-function selectNextRPC(chain: string): string {
+export function selectNextRPC(chain: string): string {
   if (!loadBalancers[chain]) {
     loadBalancers[chain] = new WeightedRoundRobin(chainsData[chain]['rpc-addresses']);
   }
   return loadBalancers[chain].selectNextEndpoint();
 }
-
-const circuitBreakers: Record<string, CircuitBreaker> = {};
-const http2Sessions: Record<string, http2.ClientHttp2Session> = {};
 
 async function getHttp2Session(url: URL): Promise<http2.ClientHttp2Session> {
   const authority = `${url.protocol}//${url.host}`;
@@ -221,7 +217,7 @@ async function proxyRequestWithRetry(chain: string, req: Request, res: Response)
   }
 }
 
-async function proxyRequestWithCaching(chain: string, req: Request, res: Response): Promise<void> {
+export async function proxyRequestWithCaching(chain: string, req: Request, res: Response): Promise<void> {
   const cacheKey = `${chain}:${req.method}:${req.url}:${JSON.stringify(req.body)}`;
   const cachedResponse = cache.get(cacheKey);
 
@@ -241,45 +237,34 @@ async function proxyRequestWithCaching(chain: string, req: Request, res: Respons
   await proxyRequestWithRetry(chain, req, res);
 }
 
-app.use(express.json());
-
-app.use((req, res, next) => {
-  logger.debug(`Incoming request: ${req.method} ${req.url}`);
-  logger.debug(`Headers: ${JSON.stringify(req.headers)}`);
-  logger.debug(`Body: ${JSON.stringify(req.body)}`);
-  next();
-});
-
-app.use(express.json());
-app.use(requestLogger);
-
-app.all('/lb/:chain', async (req: Request, res: Response) => {
-  const { chain } = req.params;
-
-  logger.debug(`Received ${req.method} request for chain: ${chain}`);
-
-  try {
-    if (!chainsData[chain]) {
-      logger.info(`Chain data for ${chain} not found.`);
-      return res.status(404).send(`Chain ${chain} not found.`);
-    }
-
-    await proxyRequestWithCaching(chain, req, res);
-  } catch (error) {
-    logger.error(`Error proxying request for ${chain}:`, error);
-    res.status(502).send(`Unable to process request after multiple attempts`);
-  }
-});
-
 export function startBalancer() {
   const app = express();
   const PORT = config.port;
 
-app.use(errorHandler);
+  app.use(express.json());
+  app.use(requestLogger);
 
-app.listen(PORT, () => {
-  logger.info(`Load balancer running at http://localhost:${PORT}`);
-});
+  app.all('/lb/:chain', async (req: Request, res: Response) => {
+    const { chain } = req.params;
+
+    logger.debug(`Received ${req.method} request for chain: ${chain}`);
+
+    try {
+      if (!chainsData[chain]) {
+        logger.info(`Chain data for ${chain} not found.`);
+        return res.status(404).send(`Chain ${chain} not found.`);
+      }
+
+      await proxyRequestWithCaching(chain, req, res);
+    } catch (error) {
+      logger.error(`Error proxying request for ${chain}:`, error);
+      res.status(502).send(`Unable to process request after multiple attempts`);
+    }
+  });
+
+  app.use(errorHandler);
+
+  app.listen(PORT, () => {
+    logger.info(`Load balancer running at http://localhost:${PORT}`);
+  });
 }
-
-export { proxyRequestWithCaching, selectNextRPC };

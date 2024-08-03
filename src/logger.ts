@@ -40,7 +40,7 @@ const createLogger = (filename: string, level: string) => {
   return logger;
 };
 
-// Override the log levels to ensure 'debug' is captured
+// Ensure debug level is set for all loggers
 config.logging.balancer = 'debug';
 config.logging.crawler = 'debug';
 config.logging.app = 'debug';
