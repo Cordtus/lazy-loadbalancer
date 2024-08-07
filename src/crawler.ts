@@ -193,11 +193,18 @@ async function checkPeerEndpoints(peerAddresses: string[], expectedChainId: stri
   const ports = loadPorts();
   const limit = pLimit(10); // Limit concurrent requests
 
-  const domainChecks = peerAddresses.filter(addr => !addr.match(/^\d+\.\d+\.\d+\.\d+/));
-  const ipChecks = peerAddresses.filter(addr => addr.match(/^\d+\.\d+\.\d+\.\d+/));
+  const isIPv6 = (address: string): boolean => address.includes(':') && !address.includes('.');
+  const isIPv4 = (address: string): boolean => /^(\d{1,3}\.){3}\d{1,3}$/.test(address);
 
-  const checkEndpointWithProtocolAndPort = async (address: string, protocol: string, port: number) => {
-    const url = `${protocol}://${address.split(':')[0]}:${port}/status`;
+  const checkEndpointWithProtocolAndPort = async (address: string, port: number) => {
+    const [host] = address.split(':');
+    const isIP = isIPv4(host) || isIPv6(host);
+    const protocol = (!isIP && !port) || port === 443 ? 'https' : 'http';
+    
+    const url = isIPv6(host) 
+      ? `${protocol}://[${host}]:${port}/status`
+      : `${protocol}://${host}:${port}/status`;
+
     try {
       const response = await fetchWithTimeout(url);
       if (response.ok) {
@@ -208,32 +215,27 @@ async function checkPeerEndpoints(peerAddresses: string[], expectedChainId: stri
         }
       }
     } catch (error) {
-      // Ignore errors
+      logger.warn(`Error checking endpoint ${url}: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
     return false;
   };
 
-  const checkSequence = async (addresses: string[], isIp: boolean) => {
-    for (const address of addresses) {
-      // Check with https and port 443
-      if (await limit(() => checkEndpointWithProtocolAndPort(address, 'https', 443))) continue;
+  const checkSequence = async (address: string) => {
+    const [host, providedPort] = address.split(':');
+    const portToCheck = providedPort ? parseInt(providedPort, 10) : null;
 
-      // Check with https and port 26657, then http and 26657
-      if (await limit(() => checkEndpointWithProtocolAndPort(address, 'https', 26657))) continue;
-      if (await limit(() => checkEndpointWithProtocolAndPort(address, 'http', 26657))) continue;
+    // Check with provided port or 443 if no port provided
+    if (await limit(() => checkEndpointWithProtocolAndPort(host, portToCheck || 443))) return;
 
-      // Check remaining ports
-      for (const port of ports) {
-        if (port !== 443 && port !== 26657) {
-          const protocol = isIp ? 'http' : 'https';
-          if (await limit(() => checkEndpointWithProtocolAndPort(address, protocol, port))) break;
-        }
+    // If no success and no specific port was provided, try common ports
+    if (!portToCheck) {
+      for (const port of [26657, ...ports]) {
+        if (port !== 443 && await limit(() => checkEndpointWithProtocolAndPort(host, port))) return;
       }
     }
   };
 
-  await checkSequence(domainChecks, false);
-  await checkSequence(ipChecks, true);
+  await Promise.all(peerAddresses.map(checkSequence));
 
   return validEndpoints;
 }
