@@ -127,8 +127,7 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
     const rpcAddress = selectNextRPC(chain);
     const url = new URL(rpcAddress);
 
-    // Always append '/status' to the RPC URL
-    url.pathname = url.pathname.replace(/\/?$/, '/') + 'status';
+    url.pathname = url.pathname.replace(/\/?$/, '/') + req.path.split('/').slice(3).join('/');
 
     if (!circuitBreakers[rpcAddress]) {
       circuitBreakers[rpcAddress] = new CircuitBreaker();
@@ -142,14 +141,19 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
     logger.debug(`Proxying request to ${url.href} (Attempt ${attempts + 1}/${maxAttempts})`);
 
     try {
+      const headers = new Headers(req.headers as Record<string, string>);
+      headers.set('host', url.host);
+
       const fetchOptions: RequestInit = {
-        method: 'GET',  // Always use GET for /status
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        method: req.method,
+        headers: headers,
         signal: AbortSignal.timeout(config.requestTimeout),
         agent: url.protocol === 'https:' ? httpsAgent : httpAgent,
       };
+
+      if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
+        fetchOptions.body = JSON.stringify(req.body);
+      }
 
       const startTime = Date.now();
       const response = await fetch(url.href, fetchOptions);
@@ -219,23 +223,23 @@ async function proxyRequestWithRetry(chain: string, req: Request, res: Response)
 }
 
 async function proxyRequestWithCaching(chain: string, req: Request, res: Response): Promise<void> {
-  // No caching for the /status endpoint to ensure round-robin works
-  if (req.url.endsWith('/status')) {
-    await proxyRequestWithRetry(chain, req, res);
-    return;
-  }
-
   const cacheKey = `${chain}:${req.method}:${req.url}:${JSON.stringify(req.body)}`;
-  const cachedResponse = cache.get(cacheKey);
+  
+  // Only cache GET and specific POST requests
+  const shouldCache = req.method === 'GET' || 
+    (req.method === 'POST' && req.body && ['block', 'tx'].includes(req.body.method));
 
-  if (cachedResponse) {
-    res.status(200).send(cachedResponse);
-    return;
+  if (shouldCache) {
+    const cachedResponse = cache.get(cacheKey);
+    if (cachedResponse) {
+      res.status(200).send(cachedResponse);
+      return;
+    }
   }
 
   const originalSend = res.send;
   res.send = function (body) {
-    if (req.method === 'GET' || req.method === 'POST') {
+    if (shouldCache) {
       cache.set(cacheKey, body);
     }
     return originalSend.call(this, body);

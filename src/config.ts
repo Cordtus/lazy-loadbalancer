@@ -17,7 +17,9 @@ const config = {
     checkInterval: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
   },
   crawler: {
-    timeout: 5000, // increased to 5 seconds
+    timeout: 3500,
+    retries: 3,
+    retryDelay: 1000,
     maxDepth: 3,
     recheckInterval: 24 * 60 * 60 * 1000, // 24 hours
   },

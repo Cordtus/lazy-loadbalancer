@@ -46,22 +46,25 @@ export function ensureFilesExist() {
 export function loadPorts(): number[] {
     ensureFilesExist();
     try {
-        const data = fs.readFileSync(PORTS_FILE_PATH, 'utf-8');
-        return JSON.parse(data);
+      const data = fs.readFileSync(PORTS_FILE_PATH, 'utf-8');
+      return JSON.parse(data).filter((port: unknown): port is number => 
+        typeof port === 'number' && !isNaN(port)
+      );
     } catch (error) {
-        logger.error('Error reading ports file:', error);
-        return [80, 443, 26657]; // Default ports
+      logger.error('Error reading ports file:', error);
+      return [80, 443, 26657]; // Default ports
     }
-}
-
-export function savePorts(ports: number[]): void {
+  }
+  
+  export function savePorts(ports: number[]): void {
     try {
-        fs.writeFileSync(PORTS_FILE_PATH, JSON.stringify(ports, null, 2));
-        logger.info('Ports saved.');
+      const uniquePorts = [...new Set(ports)].sort((a, b) => a - b);
+      fs.writeFileSync(PORTS_FILE_PATH, JSON.stringify(uniquePorts, null, 2));
+      logger.info('Ports saved.');
     } catch (error) {
-        logger.error('Error writing ports file:', error);
+      logger.error('Error writing ports file:', error);
     }
-}
+  }
 
 export function loadChainsData(): Record<string, ChainEntry> {
     ensureFilesExist();
