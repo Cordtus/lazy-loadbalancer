@@ -114,17 +114,32 @@ function extractPeerInfo(peers: Peer[]): string[] {
       return { ip, port: isNaN(port!) ? null : port };
     };
 
-    const addresses = [
-      peer.node_info.listen_addr,
-      peer.node_info.other.rpc_address,
-      peer.remote_ip
-    ].filter(Boolean);
+    // Extract IP addresses from all sources
+    const ipAddresses = new Set<string>();
+    const { ip: listenIp } = extractIPAndPort(peer.node_info.listen_addr);
+    const { ip: rpcIp, port: rpcPort } = extractIPAndPort(peer.node_info.other.rpc_address);
+    
+    if (listenIp && !isPrivateIP(listenIp) && listenIp !== 'localhost' && listenIp !== '0.0.0.0') {
+      ipAddresses.add(listenIp);
+    }
+    if (rpcIp && !isPrivateIP(rpcIp) && rpcIp !== 'localhost' && rpcIp !== '0.0.0.0') {
+      ipAddresses.add(rpcIp);
+    }
+    if (peer.remote_ip && !isPrivateIP(peer.remote_ip) && peer.remote_ip !== 'localhost' && peer.remote_ip !== '0.0.0.0') {
+      ipAddresses.add(peer.remote_ip);
+    }
 
-    addresses.forEach(address => {
-      const { ip, port } = extractIPAndPort(address);
-      if (ip && !isPrivateIP(ip) && ip !== 'localhost' && ip !== '0.0.0.0' && port !== null) {
-        ports.add(port);
-        peerAddresses.push(`${ip}:${port}`);
+    // Only add the port from rpc_address
+    if (rpcPort !== null) {
+      ports.add(rpcPort);
+    }
+
+    // Combine IPs with the RPC port if available
+    ipAddresses.forEach(ip => {
+      if (rpcPort !== null) {
+        peerAddresses.push(`${ip}:${rpcPort}`);
+      } else {
+        peerAddresses.push(ip);
       }
     });
   });
