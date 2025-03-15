@@ -78,3 +78,54 @@ export interface BlacklistedIP {
   failureCount: number;
   timestamp: number;
 }
+
+export interface LoadBalancerStrategy {
+  type: 'round-robin' | 'weighted' | 'least-connections' | 'random' | 'ip-hash';
+  options?: Record<string, any>;
+}
+
+export interface EndpointFilters {
+  whitelist?: string[];
+  blacklist?: string[];
+}
+
+export interface RouteConfig {
+  path: string;
+  strategy?: LoadBalancerStrategy;
+  filters?: EndpointFilters;
+  caching?: {
+    enabled: boolean;
+    ttl: number; // in seconds
+  };
+  sticky?: boolean;
+  timeoutMs?: number;
+  retries?: number;
+  backoffMultiplier?: number;
+  priority?: number; // higher number = higher priority
+}
+
+export interface ChainConfig {
+  defaultStrategy: LoadBalancerStrategy;
+  defaultFilters?: EndpointFilters;
+  defaultCaching?: {
+    enabled: boolean;
+    ttl: number; // in seconds
+  };
+  defaultSticky?: boolean;
+  defaultTimeoutMs?: number;
+  defaultRetries?: number;
+  defaultBackoffMultiplier?: number;
+  routes?: RouteConfig[];
+}
+
+export interface GlobalConfig {
+  defaultStrategy: LoadBalancerStrategy;
+  defaultTimeoutMs: number;
+  defaultRetries: number;
+  defaultBackoffMultiplier: number;
+  defaultCaching: {
+    enabled: boolean;
+    ttl: number;
+  };
+  chains: Record<string, ChainConfig>;
+}
