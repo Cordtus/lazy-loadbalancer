@@ -24,26 +24,22 @@ const createLogger = (filename: string, level: string) => {
         datePattern: 'YYYY-MM-DD',
         zippedArchive: true,
         maxSize: '20m',
-        maxFiles: '14d'
+        maxFiles: '14d',
       }),
     ],
   });
 
   // Add console transport
-  logger.add(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.simple()
-    )
-  }));
+  logger.add(
+    new winston.transports.Console({
+      format: winston.format.combine(winston.format.colorize(), winston.format.simple()),
+    })
+  );
 
   return logger;
 };
 
-// Ensure debug level is set for all loggers
-config.logging.balancer = 'debug';
-config.logging.crawler = 'debug';
-config.logging.app = 'debug';
+// Use configured log levels from environment
 
 export const balancerLogger = createLogger('balancer', config.logging.balancer);
 export const crawlerLogger = createLogger('crawler', config.logging.crawler);

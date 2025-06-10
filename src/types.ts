@@ -129,3 +129,29 @@ export interface GlobalConfig {
   };
   chains: Record<string, ChainConfig>;
 }
+
+export interface EndpointStats {
+  address: string;
+  weight: number;
+  responseTime: number;
+  successCount: number;
+  failureCount: number;
+  url?: string;
+  lastSeen?: number;
+  successRate?: number;
+  avgLatency?: number;
+  responseCount?: number;
+  features?: Record<string, any>;
+}
+
+export enum ErrorType {
+  TIMEOUT,
+  NETWORK,
+  INVALID_RESPONSE,
+  UNEXPECTED,
+}
+
+export interface CleanupResult {
+  cleaned: number;
+  remaining: number;
+}

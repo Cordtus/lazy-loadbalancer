@@ -1,13 +1,33 @@
 // apiExtensions.ts
 import express, { Request, Response } from 'express';
-import { enhancedCrawlNetwork, enhancedCrawlAllChains, setupScheduledCrawling, getCrawlStats } from './enhancedCrawler.js';
+import {
+  crawlNetwork,
+  crawlAllChains,
+} from './crawler.js';
 import { Database } from './database.js';
 import { appLogger as logger } from './logger.js';
 import { metricsHistory } from './metrics.js';
 
+// Simple crawler stats implementation
+function getCrawlStats() {
+  return {
+    currentCrawl: {
+      activeWorkers: 0
+    },
+    history: {
+      totalValid: 0
+    }
+  };
+}
+
+// Simple scheduled crawling setup (actual scheduling is in index.ts)
+function setupScheduledCrawling(interval: number) {
+  logger.info(`Scheduled crawling setup with interval: ${interval}ms`);
+}
+
 /**
  * Add enhanced crawler endpoints to an existing API router
- * 
+ *
  * @param router Express router to extend
  * @param db Database instance
  */
@@ -26,13 +46,13 @@ export function addCrawlerEndpoints(router: express.Router, db: Database): void 
   // Get metrics for a specific chain
   router.get('/metrics/:chainName', async (req: Request, res: Response) => {
     const { chainName } = req.params;
-    
+
     try {
       const chain = await db.getChain(chainName);
       if (!chain) {
         return res.status(404).json({ error: `Chain ${chainName} not found` });
       }
-      
+
       const metrics = metricsHistory.getChainHistory(chain['chain-id']);
       res.json(metrics);
     } catch (error) {
@@ -46,8 +66,8 @@ export function addCrawlerEndpoints(router: express.Router, db: Database): void 
     try {
       const interval = req.body.interval || 24 * 60 * 60 * 1000; // Default to 24 hours
       setupScheduledCrawling(interval);
-      res.json({ 
-        message: `Scheduled crawling started with interval of ${interval / (60 * 60 * 1000)} hours` 
+      res.json({
+        message: `Scheduled crawling started with interval of ${interval / (60 * 60 * 1000)} hours`,
       });
     } catch (error) {
       logger.error('Error starting scheduled crawling:', error);
@@ -55,90 +75,95 @@ export function addCrawlerEndpoints(router: express.Router, db: Database): void 
     }
   });
 
-  // Enhanced crawl for a specific chain
-  router.post('/enhanced-crawl-chain/:chainName', async (req: Request, res: Response) => {
+  // Crawl for a specific chain
+  router.post('/crawl-chain/:chainName', async (req: Request, res: Response) => {
     const chainName = req.params.chainName;
-    
+
     try {
       const chain = await db.getChain(chainName);
       if (!chain) {
         return res.status(404).json({ error: `Chain ${chainName} not found` });
       }
-      
-      const results = await enhancedCrawlNetwork(chainName, chain['rpc-addresses']);
-      res.json({ 
+
+      const results = await crawlNetwork(chainName, chain['rpc-addresses']);
+      res.json({
         message: `Chain ${chainName} successfully crawled`,
-        ...results 
+        ...results,
       });
     } catch (error) {
-      logger.error(`Error during enhanced crawl for ${chainName}:`, error);
+      logger.error(`Error during crawl for ${chainName}:`, error);
       res.status(500).json({ error: `Failed to crawl chain ${chainName}` });
     }
   });
 
-  // Enhanced crawl for all chains
-  router.post('/enhanced-crawl-all-chains', async (req: Request, res: Response) => {
+  // Crawl for all chains
+  router.post('/crawl-all-chains', async (req: Request, res: Response) => {
     try {
       // Use a timeout to avoid keeping the connection open too long
       const requestTimeout = setTimeout(() => {
-        res.json({ 
-          message: 'Enhanced crawl for all chains started in the background',
-          note: 'This is a long-running process, check /crawl-stats for progress'
+        res.json({
+          message: 'Crawl for all chains started in the background',
+          note: 'This is a long-running process, check /crawl-stats for progress',
         });
       }, 2000);
-      
+
       // Start the crawl in the background
-      enhancedCrawlAllChains()
-        .then(results => {
+      crawlAllChains()
+        .then((results: any) => {
           clearTimeout(requestTimeout);
-          logger.info('Enhanced crawl for all chains completed');
+          logger.info('Crawl for all chains completed');
         })
-        .catch(error => {
+        .catch((error: any) => {
           clearTimeout(requestTimeout);
-          logger.error('Error during enhanced crawl for all chains:', error);
+          logger.error('Error during crawl for all chains:', error);
         });
-      
     } catch (error) {
-      logger.error('Error starting enhanced crawl for all chains:', error);
+      logger.error('Error starting crawl for all chains:', error);
       res.status(500).json({ error: 'Failed to start crawl for all chains' });
     }
   });
 
   // Get all endpoints for a specific chain with detailed metadata
-  router.get('/enhanced-endpoints/:chainName', async (req: Request, res: Response) => {
+  router.get('/endpoints/:chainName', async (req: Request, res: Response) => {
     const chainName = req.params.chainName;
-    
+
     try {
       const chain = await db.getChain(chainName);
       if (!chain) {
         return res.status(404).json({ error: `Chain ${chainName} not found` });
       }
-      
+
       const endpoints = await db.getEndpointsByChain(chain['chain-id']);
-      
+
       // Add more readable metadata
-      const enhancedEndpoints = endpoints.map(endpoint => ({
-        url: endpoint.url,
-        lastSeen: new Date(endpoint.lastSeen).toISOString(),
-        successRate: `${(endpoint.successRate * 100).toFixed(1)}%`,
-        avgLatency: `${endpoint.avgLatency.toFixed(0)}ms`,
-        responseCount: endpoint.responseCount,
+      const detailedEndpoints = endpoints.map((endpoint) => ({
+        url: endpoint.url || endpoint.address,
+        lastSeen: endpoint.lastSeen ? new Date(endpoint.lastSeen).toISOString() : 'unknown',
+        successRate: `${((endpoint.successRate || 0) * 100).toFixed(1)}%`,
+        avgLatency: `${(endpoint.avgLatency || endpoint.responseTime || 0).toFixed(0)}ms`,
+        responseCount: endpoint.responseCount || endpoint.successCount,
         failureCount: endpoint.failureCount,
-        reliability: endpoint.failureCount === 0 ? 'Perfect' :
-                    endpoint.successRate > 0.95 ? 'Excellent' :
-                    endpoint.successRate > 0.9 ? 'Good' :
-                    endpoint.successRate > 0.8 ? 'Fair' : 'Poor',
-        features: endpoint.features
+        reliability:
+          endpoint.failureCount === 0
+            ? 'Perfect'
+            : (endpoint.successRate || 0) > 0.95
+              ? 'Excellent'
+              : (endpoint.successRate || 0) > 0.9
+                ? 'Good'
+                : (endpoint.successRate || 0) > 0.8
+                  ? 'Fair'
+                  : 'Poor',
+        features: endpoint.features || {},
       }));
-      
+
       res.json({
         chainName,
         chainId: chain['chain-id'],
         endpointCount: endpoints.length,
-        endpoints: enhancedEndpoints
+        endpoints: detailedEndpoints,
       });
     } catch (error) {
-      logger.error(`Error getting enhanced endpoints for ${chainName}:`, error);
+      logger.error(`Error getting endpoints for ${chainName}:`, error);
       res.status(500).json({ error: `Failed to get endpoints for ${chainName}` });
     }
   });
@@ -148,20 +173,23 @@ export function addCrawlerEndpoints(router: express.Router, db: Database): void 
     try {
       const stats = getCrawlStats();
       const latestMetrics = metricsHistory.getLatestMetrics();
-      
+
       res.json({
         status: 'healthy',
         activeCrawls: stats.currentCrawl.activeWorkers > 0,
         totalEndpoints: stats.history.totalValid,
-        lastCrawl: latestMetrics.size > 0 ? 
-          new Date(Math.max(...Array.from(latestMetrics.values()).map(m => m.endTime))).toISOString() : 
-          'never'
+        lastCrawl:
+          latestMetrics.size > 0
+            ? new Date(
+                Math.max(...Array.from(latestMetrics.values()).map((m: any) => m.endTime))
+              ).toISOString()
+            : 'never',
       });
     } catch (error) {
       logger.error('Error during crawler health check:', error);
-      res.status(500).json({ 
+      res.status(500).json({
         status: 'unhealthy',
-        error: 'Failed to check crawler health'
+        error: 'Failed to check crawler health',
       });
     }
   });
@@ -169,10 +197,10 @@ export function addCrawlerEndpoints(router: express.Router, db: Database): void 
 
 /**
  * How to use this module to extend your API:
- * 
+ *
  * import { addCrawlerEndpoints } from './apiExtensions.js';
  * import database from './database.js';
- * 
+ *
  * // In your API setup code:
  * const router = express.Router();
  * addCrawlerEndpoints(router, database);

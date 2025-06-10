@@ -1,34 +1,26 @@
 // Enhanced balancer.ts
 import express, { Express, Request, Response } from 'express';
-import { loadChainsData, saveChainsData, loadBlacklistedIPs, saveBlacklistedIPs } from './utils.js';
+import dataService from './dataService.js';
 import { balancerLogger as logger } from './logger.js';
 import config from './config.js';
-import configService from './configService.js';
 import { ChainEntry, EndpointStats, LoadBalancerStrategy, RouteConfig } from './types.js';
 import { HttpsAgent } from 'agentkeepalive';
 import { Agent as HttpAgent } from 'http';
 import fetch, { RequestInit } from 'node-fetch';
 import { requestLogger } from './requestLogger.js';
 import { errorHandler } from './errorHandler.js';
-import NodeCache from 'node-cache';
+import { cacheManager, sessionCache, getCacheStats } from './cacheManager.js';
 import http2 from 'http2';
 import { CircuitBreaker } from './circuitBreaker.js';
 import { performance } from 'perf_hooks';
 import crypto from 'crypto';
 
-const chainsData: Record<string, ChainEntry> = loadChainsData();
-// Main cache with configurable TTL
-const cache = new NodeCache({ 
-  stdTTL: 60, 
-  checkperiod: 120,
-  useClones: false // Performance optimization - disable cloning 
-});
+let chainsData: Record<string, ChainEntry> = {};
 
-// Session cache for sticky sessions
-const sessionCache = new NodeCache({ 
-  stdTTL: 300, // 5 minutes default session duration
-  checkperiod: 60 
-});
+// Initialize chains data
+async function initializeChainsData() {
+  chainsData = await dataService.loadChainsData();
+}
 
 // Agent pool optimization: reuse agents for better connection management
 const agentPool = {
@@ -43,7 +35,7 @@ const agentPool = {
     maxSockets: 100,
     maxFreeSockets: 10,
     timeout: 60000,
-  })
+  }),
 };
 
 class LoadBalancer {
@@ -53,8 +45,12 @@ class LoadBalancer {
   private routeConfig: RouteConfig | null;
   private activeConnections: Map<string, number>;
 
-  constructor(addresses: string[], strategy: LoadBalancerStrategy, routeConfig: RouteConfig | null) {
-    this.endpoints = addresses.map(address => ({
+  constructor(
+    addresses: string[],
+    strategy: LoadBalancerStrategy,
+    routeConfig: RouteConfig | null
+  ) {
+    this.endpoints = addresses.map((address) => ({
       address,
       weight: 1,
       responseTime: 0,
@@ -69,21 +65,22 @@ class LoadBalancer {
   selectNextEndpoint(req: Request): string {
     // Apply endpoint filters if specified in the route config
     let filteredEndpoints = [...this.endpoints];
-    
+
     if (this.routeConfig?.filters) {
       if (this.routeConfig.filters.whitelist && this.routeConfig.filters.whitelist.length > 0) {
-        filteredEndpoints = filteredEndpoints.filter(
-          e => this.routeConfig?.filters?.whitelist?.some(
-            pattern => this.matchesPattern(e.address, pattern)
+        filteredEndpoints = filteredEndpoints.filter((e) =>
+          this.routeConfig?.filters?.whitelist?.some((pattern) =>
+            this.matchesPattern(e.address, pattern)
           )
         );
       }
-      
+
       if (this.routeConfig.filters.blacklist && this.routeConfig.filters.blacklist.length > 0) {
         filteredEndpoints = filteredEndpoints.filter(
-          e => !this.routeConfig?.filters?.blacklist?.some(
-            pattern => this.matchesPattern(e.address, pattern)
-          )
+          (e) =>
+            !this.routeConfig?.filters?.blacklist?.some((pattern) =>
+              this.matchesPattern(e.address, pattern)
+            )
         );
       }
     }
@@ -98,23 +95,23 @@ class LoadBalancer {
     if (this.routeConfig?.sticky) {
       const clientIp = this.getClientIp(req);
       const sessionKey = `${req.params.chain}:${clientIp}`;
-      
+
       // Check if we have a session for this client
       const existingSession = sessionCache.get<string>(sessionKey);
       if (existingSession) {
         // Check if the endpoint from the session is still in our filtered list
-        const sessionEndpoint = filteredEndpoints.find(e => e.address === existingSession);
+        const sessionEndpoint = filteredEndpoints.find((e) => e.address === existingSession);
         if (sessionEndpoint) {
           return sessionEndpoint.address;
         }
       }
-      
+
       // If no valid session exists, create a new one
       const selectedEndpoint = this.selectEndpointByStrategy(filteredEndpoints, req);
       sessionCache.set(sessionKey, selectedEndpoint);
       return selectedEndpoint;
     }
-    
+
     // If not sticky, just select by strategy
     return this.selectEndpointByStrategy(filteredEndpoints, req);
   }
@@ -123,20 +120,20 @@ class LoadBalancer {
     if (pattern.includes('*') || pattern.includes('?')) {
       const regexPattern = pattern
         .replace(/\./g, '\\.') // Escape dots
-        .replace(/\*/g, '.*')  // * becomes .*
-        .replace(/\?/g, '.');  // ? becomes .
-      
+        .replace(/\*/g, '.*') // * becomes .*
+        .replace(/\?/g, '.'); // ? becomes .
+
       const regex = new RegExp(`^${regexPattern}$`);
       return regex.test(address);
     }
-    
+
     return address.includes(pattern);
   }
 
   private getClientIp(req: Request): string {
     const forwardedFor = req.headers['x-forwarded-for'];
     if (forwardedFor) {
-      return Array.isArray(forwardedFor) 
+      return Array.isArray(forwardedFor)
         ? forwardedFor[0].split(',')[0].trim()
         : forwardedFor.split(',')[0].trim();
     }
@@ -169,18 +166,18 @@ class LoadBalancer {
   private weightedStrategy(endpoints: EndpointStats[]): string {
     // Sort by weight (highest weight first)
     const sortedEndpoints = [...endpoints].sort((a, b) => b.weight - a.weight);
-    
+
     // Use weighted randomization
     const totalWeight = sortedEndpoints.reduce((sum, endpoint) => sum + endpoint.weight, 0);
     let random = Math.random() * totalWeight;
-    
+
     for (const endpoint of sortedEndpoints) {
       random -= endpoint.weight;
       if (random <= 0) {
         return endpoint.address;
       }
     }
-    
+
     // Fallback to first endpoint if something goes wrong
     return sortedEndpoints[0].address;
   }
@@ -189,7 +186,7 @@ class LoadBalancer {
     // Find endpoint with least active connections
     let minConnections = Number.MAX_SAFE_INTEGER;
     let selectedEndpoint = endpoints[0];
-    
+
     for (const endpoint of endpoints) {
       const connections = this.activeConnections.get(endpoint.address) || 0;
       if (connections < minConnections) {
@@ -197,13 +194,13 @@ class LoadBalancer {
         selectedEndpoint = endpoint;
       }
     }
-    
+
     // Increment connection counter
     this.activeConnections.set(
-      selectedEndpoint.address, 
+      selectedEndpoint.address,
       (this.activeConnections.get(selectedEndpoint.address) || 0) + 1
     );
-    
+
     return selectedEndpoint.address;
   }
 
@@ -214,42 +211,41 @@ class LoadBalancer {
 
   private ipHashStrategy(endpoints: EndpointStats[], req: Request): string {
     const clientIp = this.getClientIp(req);
-    
+
     // Create a hash from the IP
-    const hash = crypto
-      .createHash('md5')
-      .update(clientIp)
-      .digest('hex');
-    
+    const hash = crypto.createHash('md5').update(clientIp).digest('hex');
+
     // Convert to number and use modulo to get an index
     const hashNum = parseInt(hash.substring(0, 8), 16);
     const index = hashNum % endpoints.length;
-    
+
     return endpoints[index].address;
   }
 
   updateStats(address: string, responseTime: number, success: boolean) {
-    const endpoint = this.endpoints.find(e => e.address === address);
+    const endpoint = this.endpoints.find((e) => e.address === address);
     if (endpoint) {
       // Update response time with weighted average (80% old, 20% new)
-      endpoint.responseTime = endpoint.responseTime === 0 
-        ? responseTime 
-        : (0.8 * endpoint.responseTime) + (0.2 * responseTime);
-      
+      endpoint.responseTime =
+        endpoint.responseTime === 0
+          ? responseTime
+          : 0.8 * endpoint.responseTime + 0.2 * responseTime;
+
       // Update weight based on response time and success rate
-      const successRate = endpoint.successCount / (endpoint.successCount + endpoint.failureCount + 1);
+      const successRate =
+        endpoint.successCount / (endpoint.successCount + endpoint.failureCount + 1);
       const normalizedResponseTime = Math.min(responseTime, 5000) / 5000; // Normalize to 0-1 range
-      
+
       // Weight formula: higher success rate and lower response time = higher weight
-      endpoint.weight = (successRate * 0.7) + ((1 - normalizedResponseTime) * 0.3);
-      
+      endpoint.weight = successRate * 0.7 + (1 - normalizedResponseTime) * 0.3;
+
       // Update success/failure counters
       if (success) {
         endpoint.successCount++;
       } else {
         endpoint.failureCount++;
       }
-      
+
       // Clean up connection counter for least-connections strategy
       const connections = this.activeConnections.get(address) || 0;
       if (connections > 0) {
@@ -269,14 +265,14 @@ const http2Sessions: Record<string, http2.ClientHttp2Session> = {};
 
 export function selectNextRPC(chain: string, req: Request, pathWithoutChain: string): string {
   // Get route-specific configuration
-  const routeConfig = configService.getEffectiveRouteConfig(chain, pathWithoutChain);
+  const routeConfig = config.service.getEffectiveRouteConfig(chain, pathWithoutChain);
   const routeKey = routeConfig.path;
-  
+
   // Initialize chain-specific balancers if not exists
   if (!loadBalancers[chain]) {
     loadBalancers[chain] = {};
   }
-  
+
   // Initialize or update route-specific balancer if needed
   if (!loadBalancers[chain][routeKey]) {
     loadBalancers[chain][routeKey] = new LoadBalancer(
@@ -285,7 +281,7 @@ export function selectNextRPC(chain: string, req: Request, pathWithoutChain: str
       routeConfig
     );
   }
-  
+
   return loadBalancers[chain][routeKey].selectNextEndpoint(req);
 }
 
@@ -336,7 +332,7 @@ async function proxyRequestHttp2(chain: string, req: Request, res: Response): Pr
 
 async function proxyRequest(chain: string, req: Request, res: Response): Promise<void> {
   const pathWithoutChain = '/' + req.path.split('/').slice(3).join('/');
-  const routeConfig = configService.getEffectiveRouteConfig(chain, pathWithoutChain);
+  const routeConfig = config.service.getEffectiveRouteConfig(chain, pathWithoutChain);
   const maxAttempts = routeConfig.retries || chainsData[chain]?.['rpc-addresses'].length || 1;
   let attempts = 0;
 
@@ -361,12 +357,18 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
     const startTime = performance.now();
 
     try {
-      const headers = new Headers(req.headers as Record<string, string>);
-      headers.set('host', url.host);
+      const headerObj: Record<string, string> = {};
+      const reqHeaders = req.headers as Record<string, string>;
+      for (const key in reqHeaders) {
+        if (reqHeaders[key]) {
+          headerObj[key] = reqHeaders[key];
+        }
+      }
+      headerObj['host'] = url.host;
 
       const fetchOptions: RequestInit = {
         method: req.method,
-        headers: headers,
+        headers: headerObj,
         signal: AbortSignal.timeout(routeConfig.timeoutMs || config.requestTimeout),
         agent: url.protocol === 'https:' ? agentPool.https : agentPool.http,
       };
@@ -423,7 +425,7 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
       if (attempts < maxAttempts) {
         const backoffMultiplier = routeConfig.backoffMultiplier || 1.5;
         const delay = Math.min(1000 * Math.pow(backoffMultiplier, attempts), 10000); // Cap at 10 seconds
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
@@ -434,20 +436,22 @@ async function proxyRequest(chain: string, req: Request, res: Response): Promise
 
 async function proxyRequestWithCaching(chain: string, req: Request, res: Response): Promise<void> {
   const pathWithoutChain = '/' + req.path.split('/').slice(3).join('/');
-  const routeConfig = configService.getEffectiveRouteConfig(chain, pathWithoutChain);
+  const routeConfig = config.service.getEffectiveRouteConfig(chain, pathWithoutChain);
   const cacheConfig = routeConfig.caching;
   const cacheKey = `${chain}:${req.method}:${req.url}:${JSON.stringify(req.body)}`;
 
   // Check if caching is enabled for this route
-  const shouldCache = cacheConfig?.enabled && (
-    req.method === 'GET' || 
-    (req.method === 'POST' && req.body && ['block', 'tx', 'validators', 'status'].some(
-      method => req.body.method?.includes(method)
-    ))
-  );
+  const shouldCache =
+    cacheConfig?.enabled &&
+    (req.method === 'GET' ||
+      (req.method === 'POST' &&
+        req.body &&
+        ['block', 'tx', 'validators', 'status'].some((method) =>
+          req.body.method?.includes(method)
+        )));
 
   if (shouldCache) {
-    const cachedResponse = cache.get<string>(cacheKey);
+    const cachedResponse = cacheManager.get<string>(cacheKey);
     if (cachedResponse) {
       logger.debug(`Cache hit for ${cacheKey}`);
       res.status(200).send(cachedResponse);
@@ -459,7 +463,7 @@ async function proxyRequestWithCaching(chain: string, req: Request, res: Respons
   const originalSend = res.send;
   res.send = function (body) {
     if (shouldCache && res.statusCode >= 200 && res.statusCode < 300) {
-      cache.set(cacheKey, body, cacheConfig?.ttl);
+      cacheManager.set(cacheKey, body, cacheConfig?.ttl);
       logger.debug(`Cached response for ${cacheKey} with TTL ${cacheConfig?.ttl}s`);
     }
     return originalSend.call(this, body);
@@ -468,21 +472,23 @@ async function proxyRequestWithCaching(chain: string, req: Request, res: Respons
   await proxyRequest(chain, req, res);
 }
 
-export function startBalancer(app: Express) {
-  const PORT = config.port;
+export async function configureLoadBalancer(app: Express) {
+  // Initialize chains data
+  await initializeChainsData();
 
+  // Add load balancer specific middleware
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
   app.use(requestLogger);
 
   // Add config API endpoints
   app.get('/config/global', (req: Request, res: Response) => {
-    res.json(configService.getGlobalConfig());
+    res.json(config.service.getGlobalConfig());
   });
 
   app.put('/config/global', (req: Request, res: Response) => {
     try {
-      configService.saveGlobalConfig(req.body);
+      config.service.saveGlobalConfig(req.body);
       res.json({ success: true, message: 'Global configuration updated' });
     } catch (error) {
       logger.error('Error updating global config:', error);
@@ -492,22 +498,26 @@ export function startBalancer(app: Express) {
 
   app.get('/config/chain/:chainName', (req: Request, res: Response) => {
     const { chainName } = req.params;
-    const chainConfig = configService.getChainConfig(chainName);
+    const chainConfig = config.service.getChainConfig(chainName);
     if (chainConfig) {
       res.json(chainConfig);
     } else {
-      res.status(404).json({ success: false, message: `No configuration found for chain ${chainName}` });
+      res
+        .status(404)
+        .json({ success: false, message: `No configuration found for chain ${chainName}` });
     }
   });
 
   app.put('/config/chain/:chainName', (req: Request, res: Response) => {
     const { chainName } = req.params;
     try {
-      configService.saveChainConfig(chainName, req.body);
+      config.service.saveChainConfig(chainName, req.body);
       res.json({ success: true, message: `Configuration for chain ${chainName} updated` });
     } catch (error) {
       logger.error(`Error updating config for chain ${chainName}:`, error);
-      res.status(500).json({ success: false, message: `Failed to update configuration for chain ${chainName}` });
+      res
+        .status(500)
+        .json({ success: false, message: `Failed to update configuration for chain ${chainName}` });
     }
   });
 
@@ -515,28 +525,31 @@ export function startBalancer(app: Express) {
   app.put('/config/chain/:chainName/route', (req: Request, res: Response) => {
     const { chainName } = req.params;
     const { path, ...routeConfig } = req.body;
-    
+
     if (!path) {
-      return res.status(400).json({ success: false, message: 'Path is required for route configuration' });
+      return res
+        .status(400)
+        .json({ success: false, message: 'Path is required for route configuration' });
     }
-    
+
     try {
-      const chainConfig = configService.getChainConfig(chainName) || 
-                         configService.createDefaultChainConfig(chainName);
-      
+      const chainConfig =
+        config.service.getChainConfig(chainName) ||
+        config.service.createDefaultChainConfig(chainName);
+
       if (!chainConfig.routes) {
         chainConfig.routes = [];
       }
-      
+
       // Update existing route or add new one
-      const existingRouteIndex = chainConfig.routes.findIndex(r => r.path === path);
+      const existingRouteIndex = chainConfig.routes.findIndex((r) => r.path === path);
       if (existingRouteIndex >= 0) {
         chainConfig.routes[existingRouteIndex] = { path, ...routeConfig };
       } else {
         chainConfig.routes.push({ path, ...routeConfig });
       }
-      
-      configService.saveChainConfig(chainName, chainConfig);
+
+      config.service.saveChainConfig(chainName, chainConfig);
       res.json({ success: true, message: `Route configuration for ${chainName}:${path} updated` });
     } catch (error) {
       logger.error(`Error updating route config for ${chainName}:${path}:`, error);
@@ -548,13 +561,15 @@ export function startBalancer(app: Express) {
   app.delete('/config/chain/:chainName/route/:path', (req: Request, res: Response) => {
     const { chainName, path } = req.params;
     try {
-      const chainConfig = configService.getChainConfig(chainName);
+      const chainConfig = config.service.getChainConfig(chainName);
       if (!chainConfig || !chainConfig.routes) {
-        return res.status(404).json({ success: false, message: 'Chain or route configuration not found' });
+        return res
+          .status(404)
+          .json({ success: false, message: 'Chain or route configuration not found' });
       }
-      
-      chainConfig.routes = chainConfig.routes.filter(r => r.path !== path);
-      configService.saveChainConfig(chainName, chainConfig);
+
+      chainConfig.routes = chainConfig.routes.filter((r) => r.path !== path);
+      config.service.saveChainConfig(chainName, chainConfig);
       res.json({ success: true, message: `Route configuration for ${chainName}:${path} deleted` });
     } catch (error) {
       logger.error(`Error deleting route config for ${chainName}:${path}:`, error);
@@ -565,18 +580,8 @@ export function startBalancer(app: Express) {
   // Clear route-specific cache
   app.delete('/cache/:chain/:path?', (req: Request, res: Response) => {
     const { chain, path } = req.params;
-    const prefix = path ? `${chain}:${path}` : `${chain}:`;
-    
-    const keys = cache.keys();
-    let deletedCount = 0;
-    
-    for (const key of keys) {
-      if (key.startsWith(prefix)) {
-        cache.del(key);
-        deletedCount++;
-      }
-    }
-    
+    const pattern = path ? `${chain}:.*${path}` : `${chain}:`;
+    const deletedCount = cacheManager.flush(pattern);
     res.json({ success: true, deletedCount });
   });
 
@@ -597,21 +602,25 @@ export function startBalancer(app: Express) {
       await proxyRequestWithCaching(chain, req, res);
     } catch (error) {
       logger.error(`Error proxying request for ${chain}:`, error);
-      res.status(502).send(`Unable to process request: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      res
+        .status(502)
+        .send(
+          `Unable to process request: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
     }
   });
 
   // Enhanced stats endpoint
   app.get('/stats', (req: Request, res: Response) => {
     const stats: Record<string, Record<string, EndpointStats[]>> = {};
-    
+
     for (const [chain, routeBalancers] of Object.entries(loadBalancers)) {
       stats[chain] = {};
       for (const [routeKey, balancer] of Object.entries(routeBalancers)) {
         stats[chain][routeKey] = balancer.getStats();
       }
     }
-    
+
     res.json(stats);
   });
 
@@ -619,39 +628,23 @@ export function startBalancer(app: Express) {
   app.get('/stats/:chain', (req: Request, res: Response) => {
     const { chain } = req.params;
     if (!loadBalancers[chain]) {
-      return res.status(404).json({ success: false, message: `No stats available for chain ${chain}` });
+      return res
+        .status(404)
+        .json({ success: false, message: `No stats available for chain ${chain}` });
     }
-    
+
     const chainStats: Record<string, EndpointStats[]> = {};
     for (const [routeKey, balancer] of Object.entries(loadBalancers[chain])) {
       chainStats[routeKey] = balancer.getStats();
     }
-    
+
     res.json(chainStats);
   });
 
-  // Health check endpoint
-  app.get('/health', (req: Request, res: Response) => {
-    const health = {
-      status: 'UP',
-      timestamp: new Date().toISOString(),
-      chains: Object.keys(chainsData).length,
-      cacheStats: {
-        keys: cache.keys().length,
-        hits: cache.getStats().hits,
-        misses: cache.getStats().misses
-      },
-      memory: process.memoryUsage()
-    };
-    
-    res.json(health);
-  });
 
   app.use(errorHandler);
 
-  app.listen(PORT, () => {
-    logger.info(`Load balancer running at http://localhost:${PORT}`);
-  });
+  logger.info('Load balancer configuration completed');
 }
 
-export { proxyRequestWithCaching };
+export { proxyRequestWithCaching, LoadBalancer };
