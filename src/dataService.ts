@@ -21,15 +21,15 @@ class DataService {
 
   constructor() {
     this.mode = (process.env.DATA_STORAGE_MODE as DataStorageMode) || DataStorageMode.FILE_SYSTEM;
-    this.useDatabase = this.mode === DataStorageMode.DATABASE || this.mode === DataStorageMode.HYBRID;
+    this.useDatabase = false; // Temporarily disable database until PostgreSQL setup is complete
     
-    if (this.useDatabase) {
-      this.initializeDatabase().catch(error => {
-        logger.error('Failed to initialize database, falling back to file system:', error);
-        this.useDatabase = false;
-        this.mode = DataStorageMode.FILE_SYSTEM;
-      });
-    }
+    // if (this.useDatabase) {
+    //   this.initializeDatabase().catch(error => {
+    //     logger.error('Failed to initialize database, falling back to file system:', error);
+    //     this.useDatabase = false;
+    //     this.mode = DataStorageMode.FILE_SYSTEM;
+    //   });
+    // }
   }
 
   private async initializeDatabase(): Promise<void> {
@@ -50,12 +50,29 @@ class DataService {
 
       const data = (await response.json()) as ChainData;
 
+      // Validate required fields and handle missing data gracefully
+      if (!data.chain_name || !data.chain_id || !data.bech32_prefix) {
+        logger.warn(`Invalid chain data for ${chainName}: missing required fields`);
+        return null;
+      }
+
+      // Check if RPC endpoints exist and are properly structured
+      const rpcAddresses: string[] = [];
+      if (data.apis && data.apis.rpc && Array.isArray(data.apis.rpc)) {
+        rpcAddresses.push(...data.apis.rpc.map((rpc) => rpc.address).filter(Boolean));
+      }
+
+      if (rpcAddresses.length === 0) {
+        logger.warn(`No valid RPC addresses found for chain: ${chainName}`);
+        return null;
+      }
+
       return {
         chain_name: data.chain_name,
         'chain-id': data.chain_id,
         bech32_prefix: data.bech32_prefix,
         'account-prefix': data.bech32_prefix,
-        'rpc-addresses': data.apis.rpc.map((rpc) => rpc.address),
+        'rpc-addresses': rpcAddresses,
         timeout: '30s',
         timestamp: Date.now(),
       };

@@ -1,12 +1,14 @@
 // database.ts
-import { Pool, PoolClient } from 'pg';
+import pg from 'pg';
+const { Pool } = pg;
+import type { PoolClient } from 'pg';
 import fs from 'fs';
 import path from 'path';
 import { appLogger as logger } from './logger.js';
 import { ChainEntry, EndpointStats } from './types.js';
 
 export class Database {
-  private pool: Pool;
+  private pool: InstanceType<typeof Pool>;
   private initialized: boolean = false;
 
   constructor() {
@@ -21,7 +23,7 @@ export class Database {
       connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection cannot be established
     });
 
-    this.pool.on('error', (err) => {
+    this.pool.on('error', (err: any) => {
       logger.error('Unexpected error on idle client', err);
     });
   }
@@ -29,9 +31,8 @@ export class Database {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    let client: PoolClient | null = null;
+    const client = await this.pool.connect();
     try {
-      client = await this.pool.connect();
 
       // Create chains table
       await client.query(`
@@ -113,7 +114,7 @@ export class Database {
       logger.error('Error initializing database:', error);
       throw error;
     } finally {
-      if (client) client.release();
+      client.release();
     }
   }
 

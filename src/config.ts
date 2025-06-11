@@ -323,13 +323,15 @@ class ConfigService {
 // Create a singleton instance
 const configService = new ConfigService();
 
-// Log config loaded message
-logger.info('Configuration loaded');
-
 // Export static config and config service
 const config = {
   ...staticConfig,
   service: configService,
 };
+
+// Log config loaded message after export to avoid circular dependency
+setTimeout(() => {
+  logger.info('Configuration loaded');
+}, 0);
 
 export default config;
