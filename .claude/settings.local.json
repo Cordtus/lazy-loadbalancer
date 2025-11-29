@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm:*)",
+      "Bash(git add:*)",
+      "Bash(npm run build:*)",
+      "Bash(curl:*)",
+      "Bash(rg:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(bun install:*)",
+      "Bash(pkill:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs:*)",
+      "Bash(bunx @biomejs/biome check:*)",
+      "Bash(bunx tsc:*)",
+      "Bash(for chain in celestia neutron injective sei stride evmos kava secret archway noble)",
+      "Bash(do echo \"Testing $chain:\")",
+      "Bash(done)",
+      "Bash(python3:*)",
+      "Bash(kill:*)",
+      "WebFetch(domain:cosmoshub-rpc.publicnode.com)",
+      "Bash(timeout 10 curl:*)",
+      "Bash(timeout 5 curl:*)"
+    ],
+    "deny": []
+  }
+}

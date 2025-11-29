@@ -9,8 +9,8 @@ It is intended as a personal load balancer / unified endpoint for multiple Cosmo
 
 ## Prerequisites
 
-- Node.js (v14 or later)
-- Yarn package manager
+- Bun (>=1.1.0)
+
 
 ## Setup
 
@@ -22,7 +22,7 @@ It is intended as a personal load balancer / unified endpoint for multiple Cosmo
 
 2. Install dependencies:
    ```bash
-   yarn install
+   bun install
    ```
 
 3. Create a `.env` file with your GitHub personal access token:
@@ -32,12 +32,12 @@ It is intended as a personal load balancer / unified endpoint for multiple Cosmo
 
 4. Build the project:
    ```bash
-   yarn build
+   bun build src/index.ts --outdir dist --target bun
    ```
 
-5. Start the Node.js server:
+5. Start the server:
    ```bash
-   yarn start
+   bun run src/index.ts
    ```
 
 ## Usage
