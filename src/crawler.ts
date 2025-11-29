@@ -3,15 +3,67 @@ import { CircuitBreaker } from './circuitBreaker.ts';
 import config, { CONCURRENCY } from './config.ts';
 import dataService from './dataService.ts';
 import { crawlerLogger as logger } from './logger.ts';
-// Network crawler using Bun's native fetch
 import type { CrawlResult, NetInfo, Peer, StatusResponse } from './types.ts';
 import { isPrivateIP, isValidUrl, normalizeUrl } from './utils.ts';
 
 const MAX_FAILURES = 10;
 const MAX_DEPTH = config.crawler.maxDepth || 3;
-const MIN_REQUEST_INTERVAL_MS = 200; // Min ms between requests to same host
+const MIN_REQUEST_INTERVAL_MS = 100;
 
-// Rate limiter: track last request time per host (IP or domain)
+// Full list of known RPC ports for initial endpoint checking
+// Order matters: most common first for faster discovery
+const RPC_PORTS_FULL = [
+	443, // HTTPS standard - many production endpoints
+	26657, // Tendermint default RPC port
+	80, // HTTP standard
+	36657, // Common custom port
+	26667, // Common variation
+	26677, // Common variation
+	22257, // Custom port
+	14657, // Custom port
+	58657, // Custom port
+	33657, // Custom port
+	53657, // Custom port
+	37657, // Custom port
+	31657, // Custom port
+	10157, // Custom port
+	27957, // Custom port
+	2401, // Custom port
+	15957, // Custom port
+	8080, // HTTP alternate
+	8000, // HTTP alternate
+];
+
+// Minimal ports for peer scanning - most peers only expose RPC on standard ports
+// This dramatically reduces scan time since most peer IPs don't have RPC at all
+const PEER_SCAN_PORTS = [
+	443, // HTTPS - most common for production nodes
+	26657, // Tendermint default - most common for validators
+	80, // HTTP standard
+	36657, // Second most common variation
+];
+
+// Validate that a port is likely to be an RPC port
+function isValidRpcPort(port: number): boolean {
+	// Filter out obviously wrong ports
+	if (port < 80 || port > 65535) return false;
+	// Skip well-known non-RPC ports
+	const invalidPorts = [21, 22, 23, 25, 53, 110, 143, 993, 995]; // FTP, SSH, Telnet, SMTP, DNS, etc.
+	if (invalidPorts.includes(port)) return false;
+	return true;
+}
+
+// Get ports for peer scanning - use minimal list for speed
+function getPeerScanPorts(): number[] {
+	return PEER_SCAN_PORTS;
+}
+
+// Get full port list for initial endpoint expansion
+function getFullRpcPorts(): number[] {
+	return RPC_PORTS_FULL;
+}
+
+// Rate limiter: track last request time per host
 const hostLastRequest = new Map<string, number>();
 
 function canRequestHost(host: string): boolean {
@@ -24,140 +76,212 @@ function markHostRequested(host: string): void {
 	hostLastRequest.set(host, Date.now());
 }
 
-// DNS resolution cache (domain -> IPs)
+// DNS resolution cache
 const dnsCache = new Map<string, { ips: string[]; expires: number }>();
-const DNS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const DNS_CACHE_TTL = 5 * 60 * 1000;
 
 async function resolveDomain(domain: string): Promise<string[]> {
-	// Skip if already an IP
 	if (/^\d+\.\d+\.\d+\.\d+$/.test(domain)) {
 		return [domain];
 	}
 
-	// Check cache
 	const cached = dnsCache.get(domain);
 	if (cached && cached.expires > Date.now()) {
+		logger.debug(`DNS cache hit for ${domain}`, { ips: cached.ips });
 		return cached.ips;
 	}
 
 	try {
+		logger.debug(`Resolving DNS for ${domain}`);
 		const result = await lookup(domain, { all: true });
 		const ips = result.map((r) => r.address).filter((ip) => !isPrivateIP(ip));
 		if (ips.length > 0) {
 			dnsCache.set(domain, { ips, expires: Date.now() + DNS_CACHE_TTL });
-			logger.debug(`Resolved ${domain} to ${ips.join(', ')}`);
+			logger.info(`DNS resolved ${domain} -> ${ips.join(', ')}`);
+		} else {
+			logger.debug(`DNS resolved ${domain} but all IPs were private/filtered`);
 		}
 		return ips;
-	} catch {
+	} catch (err) {
+		logger.debug(`DNS resolution failed for ${domain}`, err);
 		return [];
+	}
+}
+
+// HTTPS probe for non-standard ports
+async function probeHttps(host: string, port: number): Promise<boolean> {
+	const url = `https://${host}:${port}/status`;
+	logger.debug(`HTTPS probe: ${url}`);
+	try {
+		const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
+		const isHttps = response.ok || response.status < 500;
+		logger.debug(`HTTPS probe ${url}: ${isHttps ? 'success' : 'failed'}`, {
+			status: response.status,
+		});
+		return isHttps;
+	} catch (err) {
+		logger.debug(`HTTPS probe ${url}: failed`, err);
+		return false;
 	}
 }
 
 async function fetchWithTimeout<T>(
 	url: string,
 	timeoutMs = config.crawler.timeout
-): Promise<T | null> {
+): Promise<{ data: T | null; raw?: string; error?: string }> {
+	logger.debug(`Fetching: ${url} (timeout: ${timeoutMs}ms)`);
 	try {
 		const response = await fetch(url, {
 			signal: AbortSignal.timeout(timeoutMs),
 		});
-		if (!response.ok) return null;
-		return response.json() as Promise<T>;
-	} catch {
-		return null;
+
+		const rawText = await response.text();
+		logger.debug(`Response from ${url}`, {
+			status: response.status,
+			contentLength: rawText.length,
+			preview: rawText.substring(0, 200),
+		});
+
+		if (!response.ok) {
+			return { data: null, raw: rawText, error: `HTTP ${response.status}` };
+		}
+
+		try {
+			const data = JSON.parse(rawText) as T;
+			return { data, raw: rawText };
+		} catch {
+			return { data: null, raw: rawText, error: 'Invalid JSON' };
+		}
+	} catch (err) {
+		const errorMsg = err instanceof Error ? err.message : String(err);
+		logger.debug(`Fetch failed: ${url}`, { error: errorMsg });
+		return { data: null, error: errorMsg };
 	}
 }
 
 async function fetchNetInfo(url: string): Promise<NetInfo | null> {
-	const data = await fetchWithTimeout<{ result: NetInfo }>(`${url}/net_info`);
+	const netInfoUrl = `${url}/net_info`;
+	logger.debug(`Fetching net_info: ${netInfoUrl}`);
+	const { data, error } = await fetchWithTimeout<{ result: NetInfo }>(netInfoUrl);
+	if (error) {
+		logger.debug(`net_info failed for ${url}`, { error });
+	}
 	return data?.result ?? null;
 }
 
 interface ExtractedPeer {
-	host: string; // IP or domain
+	host: string;
 	isIp: boolean;
 }
 
-// Check if a host is non-routable (localhost, loopback, etc.)
 function isNonRoutable(host: string): boolean {
 	if (!host) return true;
 	const lower = host.toLowerCase();
 	if (lower === 'localhost' || lower === '0.0.0.0' || lower === '::1') return true;
-	// Check for 127.x.x.x loopback
 	if (/^127\.\d+\.\d+\.\d+$/.test(host)) return true;
 	return false;
 }
 
-function extractPeerInfo(peers: Peer[]): ExtractedPeer[] {
-	const ports = dataService.loadPorts();
+// Extract port from any address string
+function extractPort(addr: string): number | null {
+	if (!addr) return null;
+	const portMatch = addr.match(/:(\d+)(?:\/|$)/);
+	if (portMatch) {
+		const port = Number.parseInt(portMatch[1], 10);
+		if (port > 0 && port <= 65535) return port;
+	}
+	return null;
+}
+
+// Extract host from various address formats
+function extractHost(addr: string): string | null {
+	if (!addr) return null;
+	// Remove protocol prefix
+	let stripped = addr.replace(/^(tcp|http|https):\/\//, '');
+	// Handle IPv6 bracket notation
+	if (stripped.startsWith('[')) return null; // Skip IPv6
+	// Handle port-only addresses like ':26657'
+	if (stripped.startsWith(':')) return null;
+	// Remove port and path
+	const colonIdx = stripped.lastIndexOf(':');
+	if (colonIdx > 0) stripped = stripped.substring(0, colonIdx);
+	// Remove any path
+	const slashIdx = stripped.indexOf('/');
+	if (slashIdx > 0) stripped = stripped.substring(0, slashIdx);
+	return stripped || null;
+}
+
+function extractPeerInfo(peers: Peer[]): { peers: ExtractedPeer[]; newPorts: number[] } {
+	const existingPorts = dataService.loadPorts();
 	const newPorts: number[] = [];
 	const hosts = new Set<string>();
 	const results: ExtractedPeer[] = [];
 
+	logger.debug(`Extracting peer info from ${peers.length} peers`);
+
 	for (const peer of peers) {
-		// Extract port from rpc_address even if the address itself is not routable
-		const rpcAddr = peer.node_info?.other?.rpc_address;
-		if (rpcAddr) {
-			const portMatch = rpcAddr.match(/:(\d+)$/);
-			if (portMatch) {
-				const port = Number.parseInt(portMatch[1], 10);
-				if (
-					port &&
-					port > 0 &&
-					port <= 65535 &&
-					!ports.includes(port) &&
-					!newPorts.includes(port)
-				) {
-					newPorts.push(port);
-				}
+		// Extract ports from ALL address fields
+		const addressFields = [
+			peer.node_info?.other?.rpc_address,
+			peer.node_info?.listen_addr,
+			peer.remote_ip ? `${peer.remote_ip}:26657` : null, // remote_ip doesn't have port
+		].filter(Boolean) as string[];
+
+		for (const addr of addressFields) {
+			const port = extractPort(addr);
+			// Only save ports that look like valid RPC ports
+			if (port && isValidRpcPort(port) && !existingPorts.includes(port) && !newPorts.includes(port)) {
+				newPorts.push(port);
+				logger.debug(`Discovered new port ${port} from ${addr}`);
 			}
 		}
 
-		// Try to get a routable host from remote_ip first
+		// Extract hosts from remote_ip (most reliable for public IP)
 		const remoteIp = peer.remote_ip;
 		if (remoteIp && !isNonRoutable(remoteIp) && !isPrivateIP(remoteIp)) {
-			// Validate IPv4 format (skip IPv6 for now)
 			const isValidIp = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(remoteIp);
 			if (isValidIp && !hosts.has(remoteIp)) {
 				hosts.add(remoteIp);
 				results.push({ host: remoteIp, isIp: true });
+				logger.debug(`Extracted IP from remote_ip: ${remoteIp}`);
 			}
 		}
 
-		// Also try to extract domain from listen_addr (tcp://domain:port or tcp://[ipv6]:port)
-		const listenAddr = peer.node_info?.listen_addr;
-		if (listenAddr) {
-			const stripped = listenAddr.replace(/^tcp:\/\//, '');
-			// Handle IPv6 bracket notation
-			if (stripped.startsWith('[')) {
-				// IPv6 - skip for now
-				continue;
-			}
-			const colonIdx = stripped.lastIndexOf(':');
-			const hostPart = colonIdx > 0 ? stripped.substring(0, colonIdx) : stripped;
+		// Extract hosts from listen_addr
+		const listenHost = extractHost(peer.node_info?.listen_addr || '');
+		if (
+			listenHost &&
+			!isNonRoutable(listenHost) &&
+			!isPrivateIP(listenHost) &&
+			!hosts.has(listenHost)
+		) {
+			hosts.add(listenHost);
+			const isIp = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(listenHost);
+			results.push({ host: listenHost, isIp });
+			logger.debug(`Extracted host from listen_addr: ${listenHost} (isIp: ${isIp})`);
+		}
 
-			// Skip private IPs and non-routable addresses
-			if (hostPart && !isNonRoutable(hostPart) && !isPrivateIP(hostPart)) {
-				if (!hosts.has(hostPart)) {
-					hosts.add(hostPart);
-					const isIp = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostPart);
-					results.push({ host: hostPart, isIp });
-				}
-			}
+		// Extract hosts from rpc_address
+		const rpcHost = extractHost(peer.node_info?.other?.rpc_address || '');
+		if (rpcHost && !isNonRoutable(rpcHost) && !isPrivateIP(rpcHost) && !hosts.has(rpcHost)) {
+			hosts.add(rpcHost);
+			const isIp = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(rpcHost);
+			results.push({ host: rpcHost, isIp });
+			logger.debug(`Extracted host from rpc_address: ${rpcHost} (isIp: ${isIp})`);
 		}
 	}
 
-	// Save any new ports discovered from rpc_address fields
+	// Save any new ports discovered
 	if (newPorts.length > 0) {
-		ports.push(...newPorts);
-		dataService.savePorts(ports);
-		logger.debug(`Added ${newPorts.length} new ports to common ports list: ${newPorts.join(', ')}`);
+		const allPorts = [...existingPorts, ...newPorts];
+		dataService.savePorts(allPorts);
+		logger.info(`Discovered ${newPorts.length} new ports: ${newPorts.join(', ')}`);
 	}
 
-	return results;
+	logger.info(`Extracted ${results.length} unique hosts from ${peers.length} peers`);
+	return { peers: results, newPorts };
 }
 
-// Export test-only helper to make unit testing easier without changing runtime behavior
 export const _test_extractPeerInfo = extractPeerInfo;
 
 interface EndpointCheckResult {
@@ -182,6 +306,7 @@ async function checkEndpointWithDepth(
 ): Promise<EndpointCheckResult> {
 	const normalized = normalizeUrl(url);
 	if (!normalized) {
+		logger.debug(`Invalid URL, skipping: ${url}`);
 		return { isValid: false, chainId: null, url, peers: [], depth, nodeId: null, moniker: null };
 	}
 
@@ -189,11 +314,16 @@ async function checkEndpointWithDepth(
 	const isHttps = parsed.protocol === 'https:' || parsed.port === '443';
 	const statusUrl = `${isHttps ? 'https' : 'http'}://${parsed.host}/status`;
 
-	try {
-		logger.debug(`Checking endpoint (depth ${depth}): ${normalized}`);
+	logger.info(`[depth ${depth}] Checking endpoint: ${normalized}`);
 
-		const data = await fetchWithTimeout<StatusResponse>(statusUrl);
-		if (!data?.result) {
+	try {
+		const { data, raw, error } = await fetchWithTimeout<StatusResponse>(statusUrl);
+
+		if (error || !data?.result) {
+			logger.debug(`Endpoint check failed: ${normalized}`, {
+				error,
+				rawPreview: raw?.substring(0, 100),
+			});
 			return {
 				isValid: false,
 				chainId: null,
@@ -212,25 +342,33 @@ async function checkEndpointWithDepth(
 		const timeDiff = Math.abs(Date.now() - latestBlockTime.getTime()) / 1000;
 		const isHealthy = timeDiff <= 60;
 
-		logger.debug(
-			`${normalized} nodeId: ${nodeId}, moniker: ${moniker}, chainId: ${chainId}, health: ${isHealthy ? 'ok' : 'stale'} (${timeDiff}s behind)`
+		logger.info(
+			`[depth ${depth}] ${normalized} - chainId: ${chainId}, moniker: ${moniker}, nodeId: ${nodeId?.substring(0, 8)}..., ` +
+				`health: ${isHealthy ? 'OK' : 'STALE'} (${timeDiff.toFixed(1)}s behind)`
 		);
 
+		logger.debug(`Full status response from ${normalized}`, {
+			nodeInfo: data.result.node_info,
+			syncInfo: data.result.sync_info,
+		});
+
 		let peers: ExtractedPeer[] = [];
-		// Only fetch peers if we haven't reached max depth
 		if (isHealthy && depth < MAX_DEPTH) {
 			const netInfo = await fetchNetInfo(normalized);
 			if (netInfo?.peers) {
-				peers = extractPeerInfo(netInfo.peers);
-				logger.debug(
-					`${normalized} returned ${peers.length} peers (will descend to depth ${depth + 1})`
+				const extracted = extractPeerInfo(netInfo.peers);
+				peers = extracted.peers;
+				logger.info(
+					`[depth ${depth}] ${normalized} returned ${netInfo.peers.length} peers, extracted ${peers.length} valid hosts`
 				);
+			} else {
+				logger.debug(`[depth ${depth}] ${normalized} returned no peers or net_info failed`);
 			}
 		}
 
 		return { isValid: isHealthy, chainId, url: normalized, peers, depth, nodeId, moniker };
 	} catch (err) {
-		logger.error(`Error checking ${normalized}`, err);
+		logger.error(`[depth ${depth}] Error checking ${normalized}`, err);
 		return {
 			isValid: false,
 			chainId: null,
@@ -243,18 +381,66 @@ async function checkEndpointWithDepth(
 	}
 }
 
+// Check a single host:port combination
+async function checkHostPort(
+	host: string,
+	port: number,
+	isIp: boolean,
+	expectedChainId: string
+): Promise<string | null> {
+	// Rate limiting per host
+	if (!canRequestHost(host)) {
+		await new Promise((r) => setTimeout(r, MIN_REQUEST_INTERVAL_MS));
+	}
+	markHostRequested(host);
+
+	// Determine protocol based on port and host type
+	let protocols: string[];
+	if (port === 443) {
+		protocols = ['https'];
+	} else if (port === 80) {
+		protocols = ['http'];
+	} else {
+		// For non-standard ports: IPs try http first, domains try https first
+		protocols = isIp ? ['http', 'https'] : ['https', 'http'];
+	}
+
+	for (const protocol of protocols) {
+		const url = `${protocol}://${host}:${port}/status`;
+		logger.debug(`Trying: ${url}`);
+
+		try {
+			const { data, error } = await fetchWithTimeout<StatusResponse>(url);
+
+			if (data?.result?.node_info?.network === expectedChainId) {
+				const endpoint = `${protocol}://${host}:${port}`;
+				logger.info(`Found valid endpoint: ${endpoint} (chainId: ${expectedChainId})`);
+				return endpoint;
+			}
+			if (data?.result?.node_info?.network) {
+				logger.debug(`${url} returned different chainId: ${data.result.node_info.network}`);
+				break; // Valid response but wrong chain, don't try other protocol
+			}
+			if (error) {
+				logger.debug(`${url} failed: ${error}`);
+			}
+		} catch {
+			// Connection error, try next protocol
+		}
+	}
+
+	return null;
+}
+
 async function checkPeerEndpoints(
 	peers: ExtractedPeer[],
 	expectedChainId: string
 ): Promise<string[]> {
 	const validEndpoints: string[] = [];
-	const foundHosts = new Set<string>(); // Track which hosts we've found valid endpoints for
-	const checkedCombos = new Set<string>(); // Track host:port combos we've tried
+	const checkedCombos = new Set<string>();
+	const foundHosts = new Set<string>(); // Track hosts with valid endpoints
 
-	// Focus on high-priority RPC ports only for peer discovery (faster scanning)
-	// Full port list is used during main crawl, not peer expansion
-	const priorityPorts = [443, 26657, 80, 36657, 46657, 26667, 26677];
-	const allPorts = priorityPorts;
+	logger.info(`Checking peer endpoints for ${peers.length} hosts (chainId: ${expectedChainId})`);
 
 	// Expand peers with resolved IPs for domains
 	const expandedPeers: ExtractedPeer[] = [];
@@ -269,92 +455,77 @@ async function checkPeerEndpoints(
 				for (const ip of ips) {
 					if (!expandedPeers.some((p) => p.host === ip)) {
 						expandedPeers.push({ host: ip, isIp: true });
+						logger.debug(`Added resolved IP ${ip} for domain ${peer.host}`);
 					}
 				}
 			}
 		}
 	}
 
-	const checkEndpoint = async (
-		host: string,
-		protocol: string,
-		port: number,
-		originalDomain?: string
-	): Promise<boolean> => {
-		// Skip if we already found an endpoint for this host or its domain
-		if (foundHosts.has(host)) return true;
-		if (originalDomain && foundHosts.has(originalDomain)) return true;
+	logger.info(
+		`Expanded ${peers.length} peers to ${expandedPeers.length} hosts (after DNS resolution)`
+	);
 
-		const comboKey = `${host}:${port}`;
-		if (checkedCombos.has(comboKey)) return false;
-		checkedCombos.add(comboKey);
+	// Use minimal port list for peer scanning - most peers don't expose RPC at all
+	const scanPorts = getPeerScanPorts();
+	logger.info(`Scanning ${scanPorts.length} common RPC ports across ${expandedPeers.length} hosts`);
 
-		// Rate limiting: wait if we recently hit this host
-		if (!canRequestHost(host)) {
-			await new Promise((r) => setTimeout(r, MIN_REQUEST_INTERVAL_MS));
-		}
-		markHostRequested(host);
+	// PORT-FIRST ITERATION: For each port, check all hosts
+	// This avoids rate limiting by spreading requests across hosts
+	for (const port of scanPorts) {
+		// Filter to hosts we haven't found endpoints for yet
+		const hostsToCheck = expandedPeers.filter((peer) => {
+			if (foundHosts.has(peer.host)) return false; // Already found
+			const comboKey = `${peer.host}:${port}`;
+			if (checkedCombos.has(comboKey)) return false;
+			checkedCombos.add(comboKey);
+			return true;
+		});
 
-		const url = `${protocol}://${host}:${port}/status`;
-		try {
-			const data = await fetchWithTimeout<StatusResponse>(url);
-			if (data?.result?.node_info?.network === expectedChainId) {
-				const endpoint = url.replace('/status', '');
-				validEndpoints.push(endpoint);
-				foundHosts.add(host);
-				if (originalDomain) foundHosts.add(originalDomain);
-				logger.debug(`Found valid endpoint: ${endpoint}`);
-				return true;
-			}
-		} catch {
-			// Ignore connection errors
-		}
-		return false;
-	};
+		if (hostsToCheck.length === 0) continue;
 
-	// Port-first iteration: cycle through peers for each port to avoid rate limiting
-	for (const port of allPorts) {
-		const remainingPeers = expandedPeers.filter((p) => !foundHosts.has(p.host));
-		if (remainingPeers.length === 0) break;
+		logger.info(`Port ${port}: checking ${hostsToCheck.length} remaining hosts`);
 
-		// Process in batches for concurrency
+		// Process hosts in batches for concurrency
 		const batchSize = CONCURRENCY.CRAWLER_PEERS;
-		for (let i = 0; i < remainingPeers.length; i += batchSize) {
-			const batch = remainingPeers.slice(i, i + batchSize);
+		for (let i = 0; i < hostsToCheck.length; i += batchSize) {
+			const batch = hostsToCheck.slice(i, i + batchSize);
 
-			await Promise.all(
+			const batchResults = await Promise.all(
 				batch.map(async (peer) => {
-					if (foundHosts.has(peer.host)) return;
+					// Double-check in case another batch found it
+					if (foundHosts.has(peer.host)) return null;
 
-					// Find original domain if this is a resolved IP
-					let originalDomain: string | undefined;
-					for (const [domain, ips] of domainToIps) {
-						if (ips.includes(peer.host)) {
-							originalDomain = domain;
-							break;
-						}
-					}
-
-					if (port === 443) {
-						// Only try https for port 443
-						await checkEndpoint(peer.host, 'https', 443, originalDomain);
-					} else {
-						// For IPs, try http first; for domains, try https first
-						if (peer.isIp) {
-							if (!(await checkEndpoint(peer.host, 'http', port, originalDomain))) {
-								await checkEndpoint(peer.host, 'https', port, originalDomain);
-							}
-						} else {
-							if (!(await checkEndpoint(peer.host, 'https', port, originalDomain))) {
-								await checkEndpoint(peer.host, 'http', port, originalDomain);
+					const endpoint = await checkHostPort(peer.host, port, peer.isIp, expectedChainId);
+					if (endpoint) {
+						foundHosts.add(peer.host);
+						// Also mark domain as found if this was a resolved IP
+						for (const [domain, ips] of domainToIps) {
+							if (ips.includes(peer.host)) {
+								foundHosts.add(domain);
+								break;
 							}
 						}
 					}
+					return endpoint;
 				})
 			);
+
+			for (const endpoint of batchResults) {
+				if (endpoint) {
+					validEndpoints.push(endpoint);
+				}
+			}
+		}
+
+		// Early exit if we've found endpoints for all hosts
+		if (foundHosts.size >= expandedPeers.length) {
+			logger.info('Found endpoints for all hosts, stopping port scan early');
+			break;
 		}
 	}
 
+	logger.info(`Peer endpoint check complete: found ${validEndpoints.length} valid endpoints`);
 	return validEndpoints;
 }
 
@@ -362,10 +533,14 @@ export async function crawlNetwork(
 	chainName: string,
 	initialRpcUrls: string[]
 ): Promise<CrawlResult> {
+	logger.info(`=== Starting crawl for chain: ${chainName} ===`);
+	logger.info(`Initial URLs: ${initialRpcUrls.length}`);
+	logger.debug('Initial URLs list:', initialRpcUrls);
+
 	const chainsData = await dataService.loadChainsData();
 	const checkedUrls = new Set<string>();
-	const checkedHosts = new Set<string>(); // Track hosts to avoid redundant port scanning
-	const seenNodeIds = new Set<string>(); // Track node IDs to avoid crawling same node via different URLs
+	const checkedHosts = new Set<string>();
+	const seenNodeIds = new Set<string>();
 	const rejectedIPs = new Set(dataService.loadRejectedIPs());
 	const goodIPs: Record<string, number> = dataService.loadGoodIPs();
 	const blacklistedIPs = await dataService.loadBlacklistedIPs();
@@ -380,24 +555,27 @@ export async function crawlNetwork(
 		return { newEndpoints: 0, totalEndpoints: 0, misplacedEndpoints: 0 };
 	}
 
+	logger.info(`Expected chainId: ${expectedChainId}`);
+
 	const startTime = Date.now();
-	const timeLimit = 5 * 60 * 1000; // 5 minutes
+	const timeLimit = 5 * 60 * 1000;
 
-	logger.info(
-		`Starting recursive crawl for ${chainName} with ${initialRpcUrls.length} initial URLs (max depth: ${MAX_DEPTH})`
-	);
-
-	// Queue with depth tracking - use array as FIFO queue
 	const queue: QueuedEndpoint[] = initialRpcUrls
 		.map((url) => normalizeUrl(url))
 		.filter((url): url is string => url !== null && isValidUrl(url))
 		.map((url) => ({ url, depth: 0 }));
 
+	logger.info(`Queue initialized with ${queue.length} valid URLs (max depth: ${MAX_DEPTH})`);
+
 	const circuitBreakers = new Map<string, CircuitBreaker>();
 
 	try {
+		let iteration = 0;
 		while (queue.length > 0 && Date.now() - startTime < timeLimit) {
-			// Take batch from queue, filtering already checked
+			iteration++;
+			const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+			logger.info(`--- Iteration ${iteration} | Queue: ${queue.length} | Elapsed: ${elapsed}s ---`);
+
 			const batch: QueuedEndpoint[] = [];
 			while (batch.length < 50 && queue.length > 0) {
 				const item = queue.shift()!;
@@ -406,7 +584,12 @@ export async function crawlNetwork(
 				}
 			}
 
-			if (batch.length === 0) continue;
+			if (batch.length === 0) {
+				logger.debug('No new URLs in batch, continuing...');
+				continue;
+			}
+
+			logger.info(`Processing batch of ${batch.length} URLs`);
 
 			const results = await Promise.all(
 				batch.map(async ({ url, depth }) => {
@@ -415,6 +598,7 @@ export async function crawlNetwork(
 					}
 					const cb = circuitBreakers.get(url)!;
 					if (cb.isOpen()) {
+						logger.debug(`Circuit breaker open for ${url}, skipping`);
 						return {
 							isValid: false,
 							chainId: null,
@@ -429,6 +613,10 @@ export async function crawlNetwork(
 				})
 			);
 
+			// Collect all unique peers from this batch for a single combined scan
+			const batchPeers: ExtractedPeer[] = [];
+			let maxDepthInBatch = 0;
+
 			for (const result of results) {
 				checkedUrls.add(result.url);
 				try {
@@ -441,16 +629,14 @@ export async function crawlNetwork(
 				if (result.isValid) {
 					cb.recordSuccess();
 
-					// Skip if we've already seen this node (by nodeId)
 					if (result.nodeId && seenNodeIds.has(result.nodeId)) {
 						skippedDuplicateNodes++;
 						logger.debug(
-							`[depth ${result.depth}] Skipping duplicate node ${result.nodeId} (${result.moniker}) at ${result.url}`
+							`[depth ${result.depth}] Duplicate node ${result.nodeId} (${result.moniker}) at ${result.url}`
 						);
 						continue;
 					}
 
-					// Mark this node as seen
 					if (result.nodeId) {
 						seenNodeIds.add(result.nodeId);
 					}
@@ -460,39 +646,37 @@ export async function crawlNetwork(
 							chainsData[chainName].rpcAddresses.push(result.url);
 							newEndpoints++;
 							logger.info(
-								`[depth ${result.depth}] Added RPC for ${chainName}: ${result.url} (${result.moniker || 'unknown'})`
+								`[depth ${result.depth}] NEW ENDPOINT: ${result.url} (${result.moniker || 'unknown'})`
 							);
+						} else {
+							logger.debug(`[depth ${result.depth}] Known endpoint: ${result.url}`);
 						}
 						goodIPs[new URL(result.url).hostname] = Date.now();
 
-						// Add discovered peers to queue at next depth level
+						// Collect peers for batch scan instead of immediate scan
 						if (result.depth < MAX_DEPTH && result.peers.length > 0) {
 							const newPeers = result.peers.filter(
 								(peer) => !checkedHosts.has(peer.host) && !rejectedIPs.has(peer.host)
 							);
-
-							if (newPeers.length > 0) {
-								logger.debug(
-									`[depth ${result.depth}] Queueing ${newPeers.length} new peers for descent`
-								);
-
-								// Validate peers before queueing (port-first iteration to avoid rate limiting)
-								const validEndpoints = await checkPeerEndpoints(newPeers, expectedChainId);
-								for (const endpoint of validEndpoints) {
-									if (!checkedUrls.has(endpoint)) {
-										queue.push({ url: endpoint, depth: result.depth + 1 });
-									}
+							for (const peer of newPeers) {
+								if (!batchPeers.some((p) => p.host === peer.host)) {
+									batchPeers.push(peer);
 								}
 							}
+							if (result.depth > maxDepthInBatch) maxDepthInBatch = result.depth;
 						}
 					} else if (result.chainId && chainsData[result.chainId]) {
 						if (!chainsData[result.chainId].rpcAddresses.includes(result.url)) {
 							chainsData[result.chainId].rpcAddresses.push(result.url);
 							misplacedEndpoints++;
 							logger.info(
-								`[depth ${result.depth}] Added misplaced RPC: ${result.url} to ${result.chainId}`
+								`[depth ${result.depth}] MISPLACED ENDPOINT: ${result.url} -> ${result.chainId}`
 							);
 						}
+					} else if (result.chainId) {
+						logger.debug(
+							`[depth ${result.depth}] Unknown chainId ${result.chainId} at ${result.url}`
+						);
 					}
 				} else {
 					cb.recordFailure();
@@ -504,6 +688,7 @@ export async function crawlNetwork(
 							entry.timestamp = Date.now();
 							if (entry.failureCount >= MAX_FAILURES) {
 								rejectedIPs.add(hostname);
+								logger.info(`Host ${hostname} permanently rejected after ${MAX_FAILURES} failures`);
 							}
 						} else {
 							blacklistedIPs.push({ ip: hostname, failureCount: 1, timestamp: Date.now() });
@@ -514,8 +699,24 @@ export async function crawlNetwork(
 				}
 			}
 
+			// Batch peer scan: process all collected peers at once
+			if (batchPeers.length > 0) {
+				const peersToScan = batchPeers.slice(0, 50);
+				logger.info(
+					`Batch peer scan: ${peersToScan.length} unique hosts (${batchPeers.length} total collected)`
+				);
+				const validEndpoints = await checkPeerEndpoints(peersToScan, expectedChainId);
+				for (const endpoint of validEndpoints) {
+					if (!checkedUrls.has(endpoint)) {
+						queue.push({ url: endpoint, depth: maxDepthInBatch + 1 });
+					}
+				}
+				logger.info(`Batch peer scan complete: queued ${validEndpoints.length} new endpoints`);
+			}
+
 			// Periodic save
-			if (newEndpoints % 10 === 0 && newEndpoints > 0) {
+			if (newEndpoints > 0 && newEndpoints % 10 === 0) {
+				logger.info(`Periodic save: ${newEndpoints} new endpoints so far`);
 				await dataService.saveChainsData(chainsData);
 				dataService.saveGoodIPs(goodIPs);
 				dataService.saveRejectedIPs([...rejectedIPs]);
@@ -532,9 +733,15 @@ export async function crawlNetwork(
 	}
 
 	const totalEndpoints = chainsData[chainName].rpcAddresses.length;
-	logger.info(
-		`Crawl for ${chainName} finished. New: ${newEndpoints}, Total: ${totalEndpoints}, Checked: ${checkedUrls.size} URLs, Skipped duplicates: ${skippedDuplicateNodes}`
-	);
+	const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+	logger.info(`=== Crawl complete for ${chainName} ===`);
+	logger.info(`Duration: ${elapsed}s`);
+	logger.info(`New endpoints: ${newEndpoints}`);
+	logger.info(`Total endpoints: ${totalEndpoints}`);
+	logger.info(`Misplaced endpoints: ${misplacedEndpoints}`);
+	logger.info(`URLs checked: ${checkedUrls.size}`);
+	logger.info(`Duplicate nodes skipped: ${skippedDuplicateNodes}`);
 
 	return {
 		newEndpoints,
@@ -544,27 +751,38 @@ export async function crawlNetwork(
 }
 
 export async function crawlAllChains(): Promise<Record<string, CrawlResult>> {
+	logger.info('=== Starting crawl for ALL chains ===');
+
 	const chainsData = await dataService.loadChainsData();
 	const results: Record<string, CrawlResult> = {};
 
 	const chainNames = Object.keys(chainsData);
+	logger.info(`Total chains to crawl: ${chainNames.length}`);
+
 	const batchSize = CONCURRENCY.CHAIN_CRAWLING;
 
 	for (let i = 0; i < chainNames.length; i += batchSize) {
 		const batch = chainNames.slice(i, i + batchSize);
+		const batchNum = Math.floor(i / batchSize) + 1;
+		const totalBatches = Math.ceil(chainNames.length / batchSize);
+
+		logger.info(`--- Chain batch ${batchNum}/${totalBatches}: ${batch.join(', ')} ---`);
 
 		const batchResults = await Promise.all(
 			batch.map(async (chainName) => {
-				logger.info(`Crawling chain: ${chainName}`);
+				logger.info(`Starting crawl for chain: ${chainName}`);
 				try {
 					const chainData = chainsData[chainName];
 					if (!chainData?.rpcAddresses?.length) {
-						logger.error(`Invalid chain data for ${chainName}`);
+						logger.error(`Invalid chain data for ${chainName}: no RPC addresses`);
 						return { chainName, result: null };
 					}
 
+					logger.info(`${chainName}: ${chainData.rpcAddresses.length} initial RPC addresses`);
 					const result = await crawlNetwork(chainName, chainData.rpcAddresses);
-					logger.info(`Finished crawling: ${chainName}`);
+					logger.info(
+						`Finished crawling: ${chainName} (new: ${result.newEndpoints}, total: ${result.totalEndpoints})`
+					);
 					return { chainName, result };
 				} catch (err) {
 					logger.error(`Error crawling ${chainName}`, err);
@@ -580,6 +798,13 @@ export async function crawlAllChains(): Promise<Record<string, CrawlResult>> {
 		}
 	}
 
-	logger.info('Finished crawling all chains');
+	const totalNew = Object.values(results).reduce((sum, r) => sum + r.newEndpoints, 0);
+	const totalEndpoints = Object.values(results).reduce((sum, r) => sum + r.totalEndpoints, 0);
+
+	logger.info('=== All chains crawl complete ===');
+	logger.info(`Chains processed: ${Object.keys(results).length}`);
+	logger.info(`Total new endpoints: ${totalNew}`);
+	logger.info(`Total endpoints across all chains: ${totalEndpoints}`);
+
 	return results;
 }
