@@ -1,6 +1,0 @@
-{
-  "watch": ["balancer.ts", "crawler.ts", "fetchChains.ts", "utils.ts", "types.ts"],
-  "ignore": ["chains.json", "good_ips.json", "rejected_ips.json"],
-  "exec": "node dist/balancer.js",
-  "ext": "ts"
-}

@@ -1,279 +1,381 @@
-import express, { Request, Response } from 'express';
-import { loadChainsData } from './utils.js';
-import { balancerLogger as logger } from './logger.js';
-import config from './config.js';
-import { ChainEntry } from './types.js';
-import { HttpsAgent } from 'agentkeepalive';
-import { Agent as HttpAgent } from 'http';
-import fetch, { RequestInit } from 'node-fetch';
-import { requestLogger } from './requestLogger.js';
-import { errorHandler } from './errorHandler.js';
-import NodeCache from 'node-cache';
-import http2 from 'http2';
+import { cacheManager, getCacheStats, sessionCache } from './cacheManager.ts';
+import { CircuitBreaker } from './circuitBreaker.ts';
+import config from './config.ts';
+import dataService from './dataService.ts';
+import { balancerLogger as logger } from './logger.ts';
+// Load balancer using Bun's native fetch
+import type { ChainEntry, EndpointStats, LbStrategy, RouteConfig } from './types.ts';
 
-const app = express();
-const PORT = config.port;
+let chainsData: Record<string, ChainEntry> = {};
 
-const chainsData: Record<string, ChainEntry> = loadChainsData();
-const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
-
-const httpsAgent = new HttpsAgent({
-  keepAlive: true,
-  maxSockets: 100,
-  maxFreeSockets: 10,
-  timeout: 60000,
-});
-
-const httpAgent = new HttpAgent({
-  keepAlive: true,
-  maxSockets: 100,
-  maxFreeSockets: 10,
-  timeout: 60000,
-});
-
-interface EndpointStats {
-  address: string;
-  weight: number;
-  responseTime: number;
+export async function initChainsData(): Promise<void> {
+	chainsData = await dataService.loadChainsData();
 }
 
-class WeightedRoundRobin {
-  private endpoints: EndpointStats[];
-  private currentIndex: number = 0;
-
-  constructor(addresses: string[]) {
-    this.endpoints = addresses.map(address => ({
-      address,
-      weight: 1,
-      responseTime: 0,
-    }));
-  }
-
-  selectNextEndpoint(): string {
-    const selected = this.endpoints[this.currentIndex];
-    this.currentIndex = (this.currentIndex + 1) % this.endpoints.length;
-    return selected.address;
-  }
-
-  updateStats(address: string, responseTime: number) {
-    const endpoint = this.endpoints.find(e => e.address === address);
-    if (endpoint) {
-      endpoint.responseTime = responseTime;
-      endpoint.weight = 1 / (responseTime || 1); // Avoid division by zero
-    }
-    this.endpoints.sort((a, b) => b.weight - a.weight);
-  }
+export function getChainsData(): Record<string, ChainEntry> {
+	return chainsData;
 }
 
-const loadBalancers: Record<string, WeightedRoundRobin> = {};
+class LoadBalancer {
+	// Test helpers (kept minimal and explicit)
+	getEndpointsForTest(): EndpointStats[] {
+		return this.endpoints;
+	}
 
-function selectNextRPC(chain: string): string {
-  if (!loadBalancers[chain]) {
-    loadBalancers[chain] = new WeightedRoundRobin(chainsData[chain]['rpc-addresses']);
-  }
-  return loadBalancers[chain].selectNextEndpoint();
+	setEndpointWeightForTest(index: number, weight: number): void {
+		if (index < 0 || index >= this.endpoints.length) return;
+		this.endpoints[index].weight = weight;
+	}
+	private endpoints: EndpointStats[];
+	private currentIndex = 0;
+	private strategy: LbStrategy;
+	private routeConfig: RouteConfig | null;
+	private activeConnections = new Map<string, number>();
+
+	constructor(addresses: string[], strategy: LbStrategy, routeConfig: RouteConfig | null) {
+		this.endpoints = addresses.map((address) => ({
+			address,
+			weight: 1,
+			responseTime: 0,
+			successCount: 0,
+			failureCount: 0,
+		}));
+		this.strategy = strategy;
+		this.routeConfig = routeConfig;
+	}
+
+	selectNextEndpoint(clientIp: string, chainName: string): string {
+		let filtered = [...this.endpoints];
+
+		// Apply whitelist/blacklist filters
+		if (this.routeConfig?.filters) {
+			const { whitelist, blacklist } = this.routeConfig.filters;
+
+			if (whitelist?.length) {
+				filtered = filtered.filter((e) => whitelist.some((p) => this.matchPattern(e.address, p)));
+			}
+
+			if (blacklist?.length) {
+				filtered = filtered.filter((e) => !blacklist.some((p) => this.matchPattern(e.address, p)));
+			}
+		}
+
+		if (filtered.length === 0) {
+			filtered = this.endpoints;
+			logger.warn('Filtered list empty, falling back to all endpoints');
+		}
+
+		// Sticky sessions
+		if (this.routeConfig?.sticky) {
+			const sessionKey = `${chainName}:${clientIp}`;
+			const existing = sessionCache.get(sessionKey) as string | undefined;
+			if (existing) {
+				const found = filtered.find((e) => e.address === existing);
+				if (found) return found.address;
+			}
+			const selected = this.selectByStrategy(filtered, clientIp);
+			sessionCache.set(sessionKey, selected);
+			return selected;
+		}
+
+		return this.selectByStrategy(filtered, clientIp);
+	}
+
+	private matchPattern(address: string, pattern: string): boolean {
+		if (pattern.includes('*') || pattern.includes('?')) {
+			const regex = new RegExp(
+				`^${pattern.replace(/\./g, '\\.').replace(/\*/g, '.*').replace(/\?/g, '.')}$`
+			);
+			return regex.test(address);
+		}
+		return address.includes(pattern);
+	}
+
+	private selectByStrategy(endpoints: EndpointStats[], clientIp: string): string {
+		switch (this.strategy.type) {
+			case 'round-robin':
+				return this.roundRobin(endpoints);
+			case 'weighted':
+				return this.weighted(endpoints);
+			case 'least-connections':
+				return this.leastConnections(endpoints);
+			case 'random':
+				return this.random(endpoints);
+			case 'ip-hash':
+				return this.ipHash(endpoints, clientIp);
+			default:
+				return this.weighted(endpoints);
+		}
+	}
+
+	private roundRobin(endpoints: EndpointStats[]): string {
+		const selected = endpoints[this.currentIndex % endpoints.length];
+		this.currentIndex = (this.currentIndex + 1) % endpoints.length;
+		return selected.address;
+	}
+
+	private weighted(endpoints: EndpointStats[]): string {
+		const totalWeight = endpoints.reduce((sum, e) => sum + e.weight, 0);
+		let random = Math.random() * totalWeight;
+
+		for (const endpoint of endpoints) {
+			random -= endpoint.weight;
+			if (random <= 0) return endpoint.address;
+		}
+		return endpoints[0].address;
+	}
+
+	private leastConnections(endpoints: EndpointStats[]): string {
+		let min = Number.MAX_SAFE_INTEGER;
+		let selected = endpoints[0];
+
+		for (const endpoint of endpoints) {
+			const conns = this.activeConnections.get(endpoint.address) || 0;
+			if (conns < min) {
+				min = conns;
+				selected = endpoint;
+			}
+		}
+
+		this.activeConnections.set(
+			selected.address,
+			(this.activeConnections.get(selected.address) || 0) + 1
+		);
+		return selected.address;
+	}
+
+	private random(endpoints: EndpointStats[]): string {
+		return endpoints[Math.floor(Math.random() * endpoints.length)].address;
+	}
+
+	private ipHash(endpoints: EndpointStats[], clientIp: string): string {
+		// Simple hash function
+		let hash = 0;
+		for (let i = 0; i < clientIp.length; i++) {
+			hash = (hash << 5) - hash + clientIp.charCodeAt(i);
+			hash |= 0;
+		}
+		return endpoints[Math.abs(hash) % endpoints.length].address;
+	}
+
+	updateStats(address: string, responseTime: number, success: boolean): void {
+		const endpoint = this.endpoints.find((e) => e.address === address);
+		if (!endpoint) return;
+
+		// Weighted average for response time
+		endpoint.responseTime =
+			endpoint.responseTime === 0 ? responseTime : 0.8 * endpoint.responseTime + 0.2 * responseTime;
+
+		if (success) {
+			endpoint.successCount++;
+		} else {
+			endpoint.failureCount++;
+		}
+
+		// Update weight based on performance
+		const successRate = endpoint.successCount / (endpoint.successCount + endpoint.failureCount + 1);
+		const normalizedRt = Math.min(responseTime, 5000) / 5000;
+		endpoint.weight = successRate * 0.7 + (1 - normalizedRt) * 0.3;
+
+		// Decrement connection count for least-connections
+		const conns = this.activeConnections.get(address) || 0;
+		if (conns > 0) {
+			this.activeConnections.set(address, conns - 1);
+		}
+	}
+
+	getStats(): EndpointStats[] {
+		return this.endpoints;
+	}
 }
 
-import { CircuitBreaker } from './circuitBreaker.js';
+const loadBalancers = new Map<string, Map<string, LoadBalancer>>();
+const circuitBreakers = new Map<string, CircuitBreaker>();
 
-const circuitBreakers: Record<string, CircuitBreaker> = {};
-const http2Sessions: Record<string, http2.ClientHttp2Session> = {};
+export function selectNextRPC(chain: string, clientIp: string, path: string): string {
+	const routeConfig = config.service.getEffectiveRouteConfig(chain, path);
+	const routeKey = routeConfig.path;
 
-async function getHttp2Session(url: URL): Promise<http2.ClientHttp2Session> {
-  const authority = `${url.protocol}//${url.host}`;
-  if (!http2Sessions[authority]) {
-    http2Sessions[authority] = http2.connect(authority);
-    http2Sessions[authority].on('error', (err) => {
-      delete http2Sessions[authority];
-      logger.error(`HTTP/2 session error for ${authority}:`, err);
-    });
-  }
-  return http2Sessions[authority];
+	if (!loadBalancers.has(chain)) {
+		loadBalancers.set(chain, new Map());
+	}
+
+	const chainBalancers = loadBalancers.get(chain)!;
+	if (!chainBalancers.has(routeKey)) {
+		chainBalancers.set(
+			routeKey,
+			new LoadBalancer(
+				chainsData[chain]?.rpcAddresses || [],
+				routeConfig.strategy || { type: 'weighted' },
+				routeConfig
+			)
+		);
+	}
+
+	return chainBalancers.get(routeKey)!.selectNextEndpoint(clientIp, chain);
 }
 
-async function proxyRequestHttp2(chain: string, req: Request, res: Response): Promise<void> {
-  const rpcAddress = selectNextRPC(chain);
-  const url = new URL(rpcAddress);
-  const session = await getHttp2Session(url);
+export async function proxyRequest(
+	chain: string,
+	path: string,
+	method: string,
+	headers: Headers,
+	body: string | null,
+	clientIp: string
+): Promise<Response> {
+	const routeConfig = config.service.getEffectiveRouteConfig(chain, path);
+	const maxAttempts = routeConfig.retries || chainsData[chain]?.rpcAddresses?.length || 1;
 
-  const stream = session.request({
-    ':method': req.method,
-    ':path': url.pathname + url.search,
-    ...req.headers,
-  });
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+		const rpcAddress = selectNextRPC(chain, clientIp, path);
+		const routeKey = routeConfig.path;
+		const url = new URL(rpcAddress);
+		url.pathname = url.pathname.replace(/\/?$/, '/') + path;
 
-  stream.on('response', (headers) => {
-    res.writeHead(headers[':status'] as number, headers);
-  });
+		if (!circuitBreakers.has(rpcAddress)) {
+			circuitBreakers.set(rpcAddress, new CircuitBreaker());
+		}
 
-  stream.on('data', (chunk) => {
-    res.write(chunk);
-  });
+		const cb = circuitBreakers.get(rpcAddress)!;
+		if (cb.isOpen()) {
+			continue;
+		}
 
-  stream.on('end', () => {
-    res.end();
-  });
+		logger.debug(`Proxying to ${url.href} (attempt ${attempt + 1}/${maxAttempts})`);
+		const startTime = performance.now();
 
-  if (req.body) {
-    stream.end(JSON.stringify(req.body));
-  } else {
-    stream.end();
-  }
+		try {
+			const reqHeaders = new Headers(headers);
+			reqHeaders.set('host', url.host);
+			reqHeaders.delete('content-length');
+
+			const response = await fetch(url.href, {
+				method,
+				headers: reqHeaders,
+				body: ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined,
+				signal: AbortSignal.timeout(routeConfig.timeoutMs || config.requestTimeout),
+			});
+
+			const responseTime = performance.now() - startTime;
+			logger.debug(`Response in ${responseTime.toFixed(0)}ms, status ${response.status}`);
+
+			if (response.ok) {
+				const text = await response.text();
+
+				// Validate JSON
+				try {
+					JSON.parse(text);
+				} catch {
+					logger.error(`Invalid JSON from ${url.href}`);
+					cb.recordFailure();
+					loadBalancers.get(chain)?.get(routeKey)?.updateStats(rpcAddress, responseTime, false);
+					continue;
+				}
+
+				cb.recordSuccess();
+				loadBalancers.get(chain)?.get(routeKey)?.updateStats(rpcAddress, responseTime, true);
+
+				// Return response without content-encoding/length headers
+				const respHeaders = new Headers(response.headers);
+				respHeaders.delete('content-encoding');
+				respHeaders.delete('content-length');
+
+				return new Response(text, {
+					status: response.status,
+					headers: respHeaders,
+				});
+			}
+
+			logger.error(`Non-OK response from ${url.href}: ${response.status}`);
+			cb.recordFailure();
+			loadBalancers.get(chain)?.get(routeKey)?.updateStats(rpcAddress, responseTime, false);
+		} catch (err) {
+			const responseTime = performance.now() - startTime;
+			logger.error(`Error proxying to ${url.href}`, err);
+			cb.recordFailure();
+			loadBalancers.get(chain)?.get(routeKey)?.updateStats(rpcAddress, responseTime, false);
+
+			// Exponential backoff
+			if (attempt < maxAttempts - 1) {
+				const delay = Math.min(1000 * (routeConfig.backoffMultiplier || 1.5) ** attempt, 10000);
+				await Bun.sleep(delay);
+			}
+		}
+	}
+
+	logger.error(`Failed after ${maxAttempts} attempts`);
+	return new Response('Unable to process request after multiple attempts', { status: 502 });
 }
 
-async function proxyRequest(chain: string, req: Request, res: Response): Promise<void> {
-  const maxAttempts = chainsData[chain]?.['rpc-addresses'].length || 1;
-  let attempts = 0;
+export async function proxyWithCaching(
+	chain: string,
+	path: string,
+	method: string,
+	headers: Headers,
+	body: string | null,
+	clientIp: string
+): Promise<Response> {
+	const routeConfig = config.service.getEffectiveRouteConfig(chain, path);
+	const cacheConfig = routeConfig.caching;
 
-  while (attempts < maxAttempts) {
-    const rpcAddress = selectNextRPC(chain);
-    const url = new URL(rpcAddress);
+	const shouldCache =
+		cacheConfig?.enabled &&
+		(method === 'GET' ||
+			(method === 'POST' &&
+				body &&
+				['block', 'tx', 'validators', 'status'].some((m) => body.includes(m))));
 
-    if (!circuitBreakers[rpcAddress]) {
-      circuitBreakers[rpcAddress] = new CircuitBreaker();
-    }
+	const cacheKey = `${chain}:${method}:${path}:${body || ''}`;
 
-    if (circuitBreakers[rpcAddress].isOpen()) {
-      attempts++;
-      continue;
-    }
+	if (shouldCache) {
+		const cached = cacheManager.get<string>(cacheKey);
+		if (cached) {
+			logger.debug(`Cache hit for ${cacheKey}`);
+			return new Response(cached, {
+				status: 200,
+				headers: { 'Content-Type': 'application/json' },
+			});
+		}
+		logger.debug(`Cache miss for ${cacheKey}`);
+	}
 
-    logger.debug(`Proxying request to ${url.href} (Attempt ${attempts + 1}/${maxAttempts})`);
+	const response = await proxyRequest(chain, path, method, headers, body, clientIp);
 
-    try {
-      const fetchOptions: RequestInit = {
-        method: req.method,
-        headers: {
-          'Content-Type': 'application/json',
-          ...Object.fromEntries(
-            Object.entries(req.headers)
-              .filter(([key]) => !['host', 'content-length'].includes(key.toLowerCase()))
-          ),
-        },
-        body: JSON.stringify(req.body),
-        signal: AbortSignal.timeout(config.requestTimeout),
-        agent: url.protocol === 'https:' ? httpsAgent : httpAgent,
-      };
+	if (shouldCache && response.ok) {
+		const text = await response.text();
+		cacheManager.set(cacheKey, text, cacheConfig?.ttl);
+		logger.debug(`Cached response for ${cacheKey}`);
+		return new Response(text, {
+			status: response.status,
+			headers: response.headers,
+		});
+	}
 
-      const startTime = Date.now();
-      const response = await fetch(url.href, fetchOptions);
-      const endTime = Date.now();
-      const responseTime = endTime - startTime;
-
-      logger.debug(`Response received in ${responseTime}ms with status ${response.status}`);
-
-      if (response.ok) {
-        const responseText = await response.text();
-        logger.debug(`Response body: ${responseText.substring(0, 200)}...`);
-
-        // Check if the response is valid JSON
-        try {
-          JSON.parse(responseText);
-        } catch (error) {
-          logger.error(`Invalid JSON response from ${url.href}`);
-          circuitBreakers[rpcAddress].recordFailure();
-          attempts++;
-          continue;
-        }
-
-        // Set safe headers
-        for (const [key, value] of response.headers.entries()) {
-          if (!['content-encoding', 'content-length'].includes(key.toLowerCase())) {
-            res.setHeader(key, value);
-          }
-        }
-        
-        loadBalancers[chain].updateStats(rpcAddress, responseTime);
-        circuitBreakers[rpcAddress].recordSuccess();
-        res.status(response.status).send(responseText);
-        return;
-      } else {
-        logger.error(`Non-OK response from ${url.href}: ${response.status}`);
-        circuitBreakers[rpcAddress].recordFailure();
-        attempts++;
-      }
-    } catch (error) {
-      logger.error(`Error proxying request to ${url.href}:`, error);
-      circuitBreakers[rpcAddress].recordFailure();
-      attempts++;
-    }
-  }
-
-  logger.error(`Failed to proxy request after ${maxAttempts} attempts`);
-  res.status(502).send('Unable to process request after multiple attempts');
+	return response;
 }
 
-async function proxyRequestWithRetry(chain: string, req: Request, res: Response): Promise<void> {
-  const maxRetries = 3;
-  let retryCount = 0;
+export function getStats(): Record<string, Record<string, EndpointStats[]>> {
+	const stats: Record<string, Record<string, EndpointStats[]>> = {};
 
-  while (retryCount < maxRetries) {
-    try {
-      await proxyRequest(chain, req, res);
-      return;
-    } catch (error) {
-      retryCount++;
-      if (retryCount >= maxRetries) {
-        throw error;
-      }
-      const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
+	for (const [chain, routeBalancers] of loadBalancers) {
+		stats[chain] = {};
+		for (const [routeKey, balancer] of routeBalancers) {
+			stats[chain][routeKey] = balancer.getStats();
+		}
+	}
+
+	return stats;
 }
 
-async function proxyRequestWithCaching(chain: string, req: Request, res: Response): Promise<void> {
-  const cacheKey = `${chain}:${req.method}:${req.url}:${JSON.stringify(req.body)}`;
-  const cachedResponse = cache.get(cacheKey);
+export function getChainStats(chain: string): Record<string, EndpointStats[]> | null {
+	const chainBalancers = loadBalancers.get(chain);
+	if (!chainBalancers) return null;
 
-  if (cachedResponse) {
-    res.status(200).send(cachedResponse);
-    return;
-  }
-
-  const originalSend = res.send;
-  res.send = function(body) {
-    if (req.method === 'GET' || req.method === 'POST') {
-      cache.set(cacheKey, body);
-    }
-    return originalSend.call(this, body);
-  };
-
-  await proxyRequestWithRetry(chain, req, res);
+	const stats: Record<string, EndpointStats[]> = {};
+	for (const [routeKey, balancer] of chainBalancers) {
+		stats[routeKey] = balancer.getStats();
+	}
+	return stats;
 }
 
-app.use(express.json());
-
-app.use((req, res, next) => {
-  logger.debug(`Incoming request: ${req.method} ${req.url}`);
-  logger.debug(`Headers: ${JSON.stringify(req.headers)}`);
-  logger.debug(`Body: ${JSON.stringify(req.body)}`);
-  next();
-});
-
-app.use(express.json());
-app.use(requestLogger);
-
-app.all('/lb/:chain', async (req: Request, res: Response) => {
-  const { chain } = req.params;
-
-  logger.debug(`Received ${req.method} request for chain: ${chain}`);
-
-  try {
-    if (!chainsData[chain]) {
-      logger.info(`Chain data for ${chain} not found.`);
-      return res.status(404).send(`Chain ${chain} not found.`);
-    }
-
-    await proxyRequestWithCaching(chain, req, res);
-  } catch (error) {
-    logger.error(`Error proxying request for ${chain}:`, error);
-    res.status(502).send(`Unable to process request after multiple attempts`);
-  }
-});
-
-app.use(errorHandler);
-
-app.listen(PORT, () => {
-  logger.info(`Load balancer running at http://localhost:${PORT}`);
-});
+export { LoadBalancer, getCacheStats };
