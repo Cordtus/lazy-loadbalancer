@@ -363,7 +363,7 @@ describe('Crawler Peer Extraction', () => {
 		// Simulate the extraction logic that's in crawler.ts
 
 		it('should extract public, routable hosts from peers', () => {
-			const extracted = extractPeerInfo(mockPeers);
+			const { peers: extracted } = extractPeerInfo(mockPeers);
 			const hosts = extracted.map((p) => p.host).sort();
 
 			const expectedHosts = [
@@ -393,6 +393,7 @@ describe('Crawler Peer Extraction', () => {
 				'cosmos_rpc.example.com',
 				'192-168-1-1.dynamic.example.com',
 				'node001.validators.cosmos.network',
+				'rpc.external.cosmos.network', // routable RPC address extracted from node17
 			].sort();
 
 			expect(new Set(hosts)).toEqual(new Set(expectedHosts));

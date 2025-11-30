@@ -343,6 +343,9 @@ async function main() {
 		const server = Bun.serve({
 			port,
 			fetch: app.fetch,
+			// Increase idle timeout to allow long-running crawl requests to complete
+			// Bun expects a small integer (max 255). Use 255 seconds (~4.25 minutes).
+			idleTimeout: 255,
 		});
 
 		const duration = performance.now() - startTime;
