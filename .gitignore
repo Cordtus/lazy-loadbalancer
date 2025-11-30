@@ -44,3 +44,7 @@ bun.lockb
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Misc
+CLAUDE.md
+.claude/
