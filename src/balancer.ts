@@ -8,6 +8,78 @@ import type { ChainEntry, EndpointStats, LbStrategy, RouteConfig } from './types
 
 let chainsData: Record<string, ChainEntry> = {};
 
+export type EndpointKind = 'rpc' | 'rest';
+
+const RPC_PATHS = new Set([
+	'',
+	'abci_info',
+	'abci_query',
+	'block',
+	'block_by_hash',
+	'block_results',
+	'blockchain',
+	'broadcast_tx_async',
+	'broadcast_tx_commit',
+	'broadcast_tx_sync',
+	'commit',
+	'consensus_params',
+	'consensus_state',
+	'dump_consensus_state',
+	'genesis',
+	'health',
+	'net_info',
+	'num_unconfirmed_txs',
+	'status',
+	'tx',
+	'tx_search',
+	'unconfirmed_txs',
+	'validators',
+]);
+
+function getRoutePath(path: string): string {
+	const queryIndex = path.indexOf('?');
+	return queryIndex === -1 ? path : path.slice(0, queryIndex);
+}
+
+function getRouteKey(routePath: string, kind: EndpointKind): string {
+	return `${kind}:${routePath}`;
+}
+
+export function inferEndpointKind(path: string): EndpointKind {
+	const routePath = getRoutePath(path).replace(/^\/+/, '');
+	const firstSegment = routePath.split('/')[0] || '';
+	return RPC_PATHS.has(firstSegment) ? 'rpc' : 'rest';
+}
+
+export function getEndpointAddressesForKind(
+	chainData: ChainEntry | undefined,
+	kind: EndpointKind
+): string[] {
+	if (!chainData) return [];
+	const rpcAddresses = chainData.rpcAddresses?.filter(Boolean) || [];
+	const restAddresses = chainData.restAddresses?.filter(Boolean) || [];
+
+	if (kind === 'rest') {
+		return restAddresses.length > 0 ? restAddresses : rpcAddresses;
+	}
+
+	return rpcAddresses.length > 0 ? rpcAddresses : restAddresses;
+}
+
+export function buildTargetUrl(baseAddress: string, requestPath: string): string {
+	const base = new URL(baseAddress.endsWith('/') ? baseAddress : `${baseAddress}/`);
+	const cleanRequestPath = requestPath.replace(/^\/+/, '');
+	const queryIndex = cleanRequestPath.indexOf('?');
+	const pathPart = queryIndex === -1 ? cleanRequestPath : cleanRequestPath.slice(0, queryIndex);
+	const search = queryIndex === -1 ? '' : cleanRequestPath.slice(queryIndex);
+	const basePath = base.pathname.replace(/\/?$/, '/');
+
+	base.pathname = `${basePath}${pathPart}`.replace(/\/{2,}/g, '/');
+	base.search = search;
+
+	return base.toString();
+}
+
 export async function initChainsData(): Promise<void> {
 	chainsData = await dataService.loadChainsData();
 }
@@ -192,9 +264,19 @@ class LoadBalancer {
 const loadBalancers = new Map<string, Map<string, LoadBalancer>>();
 const circuitBreakers = new Map<string, CircuitBreaker>();
 
-export function selectNextRPC(chain: string, clientIp: string, path: string): string {
-	const routeConfig = config.service.getEffectiveRouteConfig(chain, path);
-	const routeKey = routeConfig.path;
+export function selectNextEndpoint(
+	chain: string,
+	clientIp: string,
+	path: string,
+	kind: EndpointKind = inferEndpointKind(path)
+): string {
+	const routeConfig = config.service.getEffectiveRouteConfig(chain, getRoutePath(path));
+	const routeKey = getRouteKey(routeConfig.path, kind);
+	const addresses = getEndpointAddressesForKind(chainsData[chain], kind);
+
+	if (addresses.length === 0) {
+		throw new Error(`No ${kind.toUpperCase()} endpoints available for chain ${chain}`);
+	}
 
 	if (!loadBalancers.has(chain)) {
 		loadBalancers.set(chain, new Map());
@@ -204,15 +286,15 @@ export function selectNextRPC(chain: string, clientIp: string, path: string): st
 	if (!chainBalancers.has(routeKey)) {
 		chainBalancers.set(
 			routeKey,
-			new LoadBalancer(
-				chainsData[chain]?.rpcAddresses || [],
-				routeConfig.strategy || { type: 'weighted' },
-				routeConfig
-			)
+			new LoadBalancer(addresses, routeConfig.strategy || { type: 'weighted' }, routeConfig)
 		);
 	}
 
 	return chainBalancers.get(routeKey)!.selectNextEndpoint(clientIp, chain);
+}
+
+export function selectNextRPC(chain: string, clientIp: string, path: string): string {
+	return selectNextEndpoint(chain, clientIp, path, 'rpc');
 }
 
 export async function proxyRequest(
@@ -223,20 +305,28 @@ export async function proxyRequest(
 	body: string | null,
 	clientIp: string
 ): Promise<Response> {
-	const routeConfig = config.service.getEffectiveRouteConfig(chain, path);
-	const maxAttempts = routeConfig.retries || chainsData[chain]?.rpcAddresses?.length || 1;
+	const endpointKind = inferEndpointKind(path);
+	const routeConfig = config.service.getEffectiveRouteConfig(chain, getRoutePath(path));
+	const endpointAddresses = getEndpointAddressesForKind(chainsData[chain], endpointKind);
+	if (endpointAddresses.length === 0) {
+		return new Response(`No ${endpointKind.toUpperCase()} endpoints available for ${chain}`, {
+			status: 502,
+		});
+	}
+
+	const maxAttempts = routeConfig.retries || endpointAddresses.length || 1;
+	const routeKey = getRouteKey(routeConfig.path, endpointKind);
 
 	for (let attempt = 0; attempt < maxAttempts; attempt++) {
-		const rpcAddress = selectNextRPC(chain, clientIp, path);
-		const routeKey = routeConfig.path;
-		const url = new URL(rpcAddress);
-		url.pathname = url.pathname.replace(/\/?$/, '/') + path;
+		const endpointAddress = selectNextEndpoint(chain, clientIp, path, endpointKind);
+		const url = new URL(buildTargetUrl(endpointAddress, path));
+		const circuitKey = `${endpointKind}:${endpointAddress}`;
 
-		if (!circuitBreakers.has(rpcAddress)) {
-			circuitBreakers.set(rpcAddress, new CircuitBreaker());
+		if (!circuitBreakers.has(circuitKey)) {
+			circuitBreakers.set(circuitKey, new CircuitBreaker());
 		}
 
-		const cb = circuitBreakers.get(rpcAddress)!;
+		const cb = circuitBreakers.get(circuitKey)!;
 		if (cb.isOpen()) {
 			continue;
 		}
@@ -268,17 +358,21 @@ export async function proxyRequest(
 				} catch {
 					logger.error(`Invalid JSON from ${url.href}`);
 					cb.recordFailure();
-					loadBalancers.get(chain)?.get(routeKey)?.updateStats(rpcAddress, responseTime, false);
+					loadBalancers
+						.get(chain)
+						?.get(routeKey)
+						?.updateStats(endpointAddress, responseTime, false);
 					continue;
 				}
 
 				cb.recordSuccess();
-				loadBalancers.get(chain)?.get(routeKey)?.updateStats(rpcAddress, responseTime, true);
+				loadBalancers.get(chain)?.get(routeKey)?.updateStats(endpointAddress, responseTime, true);
 
 				// Return response without content-encoding/length headers
 				const respHeaders = new Headers(response.headers);
 				respHeaders.delete('content-encoding');
 				respHeaders.delete('content-length');
+				respHeaders.set('access-control-allow-origin', '*');
 
 				return new Response(text, {
 					status: response.status,
@@ -288,12 +382,12 @@ export async function proxyRequest(
 
 			logger.error(`Non-OK response from ${url.href}: ${response.status}`);
 			cb.recordFailure();
-			loadBalancers.get(chain)?.get(routeKey)?.updateStats(rpcAddress, responseTime, false);
+			loadBalancers.get(chain)?.get(routeKey)?.updateStats(endpointAddress, responseTime, false);
 		} catch (err) {
 			const responseTime = performance.now() - startTime;
 			logger.error(`Error proxying to ${url.href}`, err);
 			cb.recordFailure();
-			loadBalancers.get(chain)?.get(routeKey)?.updateStats(rpcAddress, responseTime, false);
+			loadBalancers.get(chain)?.get(routeKey)?.updateStats(endpointAddress, responseTime, false);
 
 			// Exponential backoff
 			if (attempt < maxAttempts - 1) {
@@ -315,7 +409,7 @@ export async function proxyWithCaching(
 	body: string | null,
 	clientIp: string
 ): Promise<Response> {
-	const routeConfig = config.service.getEffectiveRouteConfig(chain, path);
+	const routeConfig = config.service.getEffectiveRouteConfig(chain, getRoutePath(path));
 	const cacheConfig = routeConfig.caching;
 
 	const shouldCache =

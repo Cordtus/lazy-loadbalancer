@@ -33,8 +33,13 @@ class DataService {
 				rpcAddresses.push(...data.apis.rpc.map((r) => r.address).filter(Boolean));
 			}
 
-			if (rpcAddresses.length === 0) {
-				logger.warn(`No RPC addresses for chain: ${chainName}`);
+			const restAddresses: string[] = [];
+			if (data.apis?.rest && Array.isArray(data.apis.rest)) {
+				restAddresses.push(...data.apis.rest.map((r) => r.address).filter(Boolean));
+			}
+
+			if (rpcAddresses.length === 0 && restAddresses.length === 0) {
+				logger.warn(`No RPC or REST addresses for chain: ${chainName}`);
 				return null;
 			}
 
@@ -43,6 +48,7 @@ class DataService {
 				chainId: data.chain_id,
 				bech32Prefix: data.bech32_prefix,
 				rpcAddresses,
+				restAddresses,
 				timeout: '30s',
 				timestamp: Date.now(),
 			};

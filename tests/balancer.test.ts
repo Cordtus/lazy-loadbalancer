@@ -1,6 +1,11 @@
 // tests/balancer.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LoadBalancer } from '../src/balancer';
+import {
+	LoadBalancer,
+	buildTargetUrl,
+	getEndpointAddressesForKind,
+	inferEndpointKind,
+} from '../src/balancer';
 import { CircuitBreaker } from '../src/circuitBreaker';
 
 // Mock dependencies
@@ -186,5 +191,53 @@ describe('LoadBalancer', () => {
 			expect(second).not.toBe('https://test.other-domain.com');
 			expect(third).not.toBe('https://test.other-domain.com');
 		});
+	});
+});
+
+describe('Universal endpoint helpers', () => {
+	it('should route Cosmos SDK REST paths to REST endpoints', () => {
+		expect(inferEndpointKind('ibc/apps/transfer/v1/channels/channel-141')).toBe('rest');
+		expect(inferEndpointKind('cosmos/bank/v1beta1/balances/cosmos1abc')).toBe('rest');
+		expect(inferEndpointKind('cosmwasm/wasm/v1/contract/foo/state')).toBe('rest');
+	});
+
+	it('should keep Tendermint RPC paths on RPC endpoints', () => {
+		expect(inferEndpointKind('status')).toBe('rpc');
+		expect(inferEndpointKind('block?height=12')).toBe('rpc');
+		expect(inferEndpointKind('broadcast_tx_sync?tx=abc')).toBe('rpc');
+	});
+
+	it('should choose matching endpoint arrays with RPC fallback for legacy chain data', () => {
+		const chainData = {
+			chainName: 'cosmoshub',
+			chainId: 'cosmoshub-4',
+			bech32Prefix: 'cosmos',
+			rpcAddresses: ['https://rpc.example.com'],
+			restAddresses: ['https://rest.example.com'],
+		};
+
+		expect(getEndpointAddressesForKind(chainData, 'rest')).toEqual(['https://rest.example.com']);
+		expect(getEndpointAddressesForKind(chainData, 'rpc')).toEqual(['https://rpc.example.com']);
+		expect(getEndpointAddressesForKind({ ...chainData, restAddresses: [] }, 'rest')).toEqual([
+			'https://rpc.example.com',
+		]);
+	});
+
+	it('should preserve base paths and query strings when building proxy target URLs', () => {
+		expect(
+			buildTargetUrl(
+				'https://rest.example.com/cosmoshub/',
+				'ibc/apps/transfer/v1/channels/channel-141/ports/transfer/escrow_address'
+			)
+		).toBe(
+			'https://rest.example.com/cosmoshub/ibc/apps/transfer/v1/channels/channel-141/ports/transfer/escrow_address'
+		);
+
+		expect(
+			buildTargetUrl(
+				'https://rest.example.com',
+				'cosmos/bank/v1beta1/supply/by_denom?denom=ibc%2FABC'
+			)
+		).toBe('https://rest.example.com/cosmos/bank/v1beta1/supply/by_denom?denom=ibc%2FABC');
 	});
 });

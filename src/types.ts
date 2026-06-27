@@ -5,6 +5,7 @@ export interface ChainEntry {
 	chainId: string;
 	bech32Prefix: string;
 	rpcAddresses: string[];
+	restAddresses?: string[];
 	timeout?: string;
 	timestamp?: number;
 	lastUpdated?: string;
@@ -120,6 +121,8 @@ export interface CrawlResult {
 	newEndpoints: number;
 	totalEndpoints: number;
 	misplacedEndpoints: number;
+	newRestEndpoints?: number;
+	totalRestEndpoints?: number;
 }
 
 export interface CleanupResult {
@@ -155,5 +158,6 @@ export interface ChainRegistryData {
 	bech32_prefix: string;
 	apis?: {
 		rpc?: Array<{ address: string }>;
+		rest?: Array<{ address: string }>;
 	};
 }
