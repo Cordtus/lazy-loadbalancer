@@ -1,6 +1,10 @@
 // tests/crawler.test.ts
 import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { _test_extractPeerInfo as extractPeerInfo } from '../src/crawler';
+import {
+	buildRestEndpointCandidates,
+	_test_extractPeerInfo as extractPeerInfo,
+	parseRestNodeInfoChainId,
+} from '../src/crawler';
 import type { NetInfo, Peer, StatusResponse } from '../src/types';
 import { isPrivateIP, normalizeUrl } from '../src/utils';
 
@@ -607,6 +611,40 @@ describe('Status Response Parsing', () => {
 
 		expect(response.result.sync_info.latest_block_time).toBe(MOCK_BLOCK_TIME);
 		expect(response.result.sync_info.latest_block_height).toBe('12345678');
+	});
+});
+
+describe('REST Endpoint Discovery Helpers', () => {
+	it('should build REST probe candidates with production ports first', () => {
+		expect(buildRestEndpointCandidates('rest.example.com', [443, 80, 1317])).toEqual([
+			'https://rest.example.com',
+			'http://rest.example.com',
+			'https://rest.example.com:1317',
+			'http://rest.example.com:1317',
+		]);
+	});
+
+	it('should prefer HTTP before HTTPS for non-standard IP REST ports', () => {
+		expect(buildRestEndpointCandidates('1.2.3.4', [1317], true)).toEqual([
+			'http://1.2.3.4:1317',
+			'https://1.2.3.4:1317',
+		]);
+	});
+
+	it('should extract chain IDs from Cosmos SDK REST node_info responses', () => {
+		expect(
+			parseRestNodeInfoChainId({
+				default_node_info: { network: 'cosmoshub-4' },
+			})
+		).toBe('cosmoshub-4');
+
+		expect(
+			parseRestNodeInfoChainId({
+				node_info: { network: 'osmosis-1' },
+			})
+		).toBe('osmosis-1');
+
+		expect(parseRestNodeInfoChainId({})).toBeNull();
 	});
 });
 

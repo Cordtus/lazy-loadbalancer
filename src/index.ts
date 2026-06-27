@@ -107,7 +107,9 @@ api.get('/chains-summary', async (c) => {
 	const chainsData = await dataService.loadChainsData();
 	const summary = Object.entries(chainsData).map(([name, data]) => ({
 		name,
-		endpointCount: data.rpcAddresses.length,
+		endpointCount: data.rpcAddresses.length + (data.restAddresses?.length || 0),
+		rpcCount: data.rpcAddresses.length,
+		restCount: data.restAddresses?.length || 0,
 	}));
 	return c.json(summary);
 });
@@ -122,6 +124,8 @@ api.get('/rpc-list/:chainName', async (c) => {
 		chainName,
 		rpcCount: chainData.rpcAddresses.length,
 		rpcList: chainData.rpcAddresses,
+		restCount: chainData.restAddresses?.length || 0,
+		restList: chainData.restAddresses || [],
 	});
 });
 
@@ -166,13 +170,20 @@ api.post('/cleanup-blacklist', async (c) => {
 
 api.post('/add-chain', async (c) => {
 	const body = await c.req.json();
-	const { chainName, chainId, rpcAddresses, bech32Prefix } = body;
+	const { chainName, chainId, rpcAddresses = [], restAddresses = [], bech32Prefix } = body;
 
-	if (!chainName || !chainId || !rpcAddresses || !Array.isArray(rpcAddresses) || !bech32Prefix) {
+	if (
+		!chainName ||
+		!chainId ||
+		!Array.isArray(rpcAddresses) ||
+		!Array.isArray(restAddresses) ||
+		(rpcAddresses.length === 0 && restAddresses.length === 0) ||
+		!bech32Prefix
+	) {
 		return c.json(
 			{
 				error:
-					'Invalid chain data. Required: chainName, chainId, rpcAddresses (array), bech32Prefix',
+					'Invalid chain data. Required: chainName, chainId, rpcAddresses or restAddresses (array), bech32Prefix',
 			},
 			400
 		);
@@ -188,6 +199,7 @@ api.post('/add-chain', async (c) => {
 		chainName,
 		chainId,
 		rpcAddresses,
+		restAddresses,
 		bech32Prefix,
 		timeout: '30s',
 	};
@@ -273,7 +285,9 @@ app.all('/lb/:chain/*', async (c) => {
 		return c.text(`Chain ${chain} not found`, 404);
 	}
 
+	const requestUrl = new URL(c.req.url);
 	const path = c.req.path.replace(`/lb/${chain}`, '').replace(/^\//, '');
+	const pathWithQuery = requestUrl.search ? `${path}${requestUrl.search}` : path;
 	const clientIp =
 		c.req.header('x-forwarded-for')?.split(',')[0].trim() || c.req.header('x-real-ip') || '0.0.0.0';
 
@@ -282,7 +296,7 @@ app.all('/lb/:chain/*', async (c) => {
 
 		const response = await proxyWithCaching(
 			chain,
-			path,
+			pathWithQuery,
 			c.req.method,
 			new Headers(c.req.raw.headers),
 			body,

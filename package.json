@@ -9,8 +9,8 @@
     "dev": "bun run --watch src/index.ts",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "test": "bun test",
-    "lint": "bunx @biomejs/biome check src/",
-    "format": "bunx @biomejs/biome format --write src/",
+    "lint": "bunx @biomejs/biome check src tests",
+    "format": "bunx @biomejs/biome format --write src tests",
     "clean": "rm -rf dist"
   },
   "dependencies": {
