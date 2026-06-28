@@ -25,6 +25,71 @@ export interface ChainSummary {
 	lastCrawled?: string;
 }
 
+export interface IbcRegistryChainSide {
+	chain_name: string;
+	client_id: string;
+	connection_id: string;
+}
+
+export interface IbcRegistryChannelSide {
+	channel_id: string;
+	port_id?: string;
+	client_id?: string;
+	connection_id?: string;
+}
+
+export interface IbcRegistryChannelTags {
+	status?: string;
+	preferred?: boolean;
+	dex?: string;
+	properties?: string;
+}
+
+export interface IbcRegistryChannel {
+	chain_1: IbcRegistryChannelSide;
+	chain_2: IbcRegistryChannelSide;
+	ordering: string;
+	version: string;
+	tags?: IbcRegistryChannelTags;
+}
+
+export interface IbcRegistryFile {
+	chain_1: IbcRegistryChainSide;
+	chain_2: IbcRegistryChainSide;
+	channels: IbcRegistryChannel[];
+}
+
+export interface IbcLink {
+	sourceChainName: string;
+	sourceChainId: string;
+	destinationChainName: string;
+	destinationChainId: string;
+	channelId: string;
+	portId: string;
+	counterpartyChannelId: string;
+	counterpartyPortId: string;
+	clientId: string;
+	counterpartyClientId: string;
+	connectionId: string;
+	counterpartyConnectionId: string;
+	ordering: string;
+	version: string;
+	tags: IbcRegistryChannelTags;
+	sourceFile: string;
+}
+
+export interface IbcLinkResolutionResult {
+	source: {
+		name: string;
+		chainId: string;
+	};
+	destination: {
+		name: string;
+		chainId: string;
+	};
+	links: IbcLink[];
+}
+
 export interface NetInfo {
 	peers: Peer[];
 }
@@ -163,6 +228,7 @@ export enum CircuitState {
 export interface GithubContent {
 	name: string;
 	type: string;
+	download_url?: string;
 }
 
 export interface ChainRegistryData {

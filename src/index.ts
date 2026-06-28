@@ -16,6 +16,7 @@ import { summarizeChains } from './chainSummary.ts';
 import config from './config.ts';
 import { crawlAllChains, crawlNetwork } from './crawler.ts';
 import dataService from './dataService.ts';
+import { resolveIbcLinksFromChainRegistry } from './ibcLinks.ts';
 import { appLogger as logger } from './logger.ts';
 import SchedulerService from './scheduler.ts';
 import type { ChainConfig, GlobalConfig } from './types.ts';
@@ -107,6 +108,35 @@ api.get('/chain-list', async (c) => {
 api.get('/chains-summary', async (c) => {
 	const chainsData = await dataService.loadChainsData();
 	return c.json(summarizeChains(chainsData));
+});
+
+api.get('/ibc-links', async (c) => {
+	const source = c.req.query('source')?.trim();
+	const destination = c.req.query('destination')?.trim();
+	if (!source || !destination) {
+		return c.json({ error: 'Query parameters source and destination are required' }, 400);
+	}
+
+	try {
+		const chainsData = await dataService.loadChainsData();
+		const links = await resolveIbcLinksFromChainRegistry({
+			source,
+			destination,
+			chainsData,
+		});
+		return c.json(links);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : 'Failed to resolve IBC links';
+		if (
+			message.startsWith('Unknown source chain') ||
+			message.startsWith('Unknown destination chain')
+		) {
+			return c.json({ error: message }, 404);
+		}
+
+		logger.error('Failed to resolve IBC links', err);
+		return c.json({ error: message }, 500);
+	}
 });
 
 api.get('/rpc-list/:chainName', async (c) => {
