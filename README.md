@@ -76,7 +76,16 @@ bun run build     # Bundle src/index.ts for Bun
    curl http://localhost:3000/api/chains-summary
    ```
 
-3. Get endpoint lists for a specific chain:
+3. Resolve IBC channel links between two chains by chain name or chain ID:
+   ```bash
+   curl 'http://localhost:3000/api/ibc-links?source=genesis_29-2&destination=osmosis-1'
+   ```
+
+   The response is sorted with preferred live registry links first and includes
+   source-side channel/port, counterparty channel/port, connection, client, and
+   chain ID metadata.
+
+4. Get endpoint lists for a specific chain:
    ```bash
    curl http://localhost:3000/api/rpc-list/osmosis
    ```
