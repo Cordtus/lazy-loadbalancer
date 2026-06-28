@@ -12,6 +12,19 @@ export interface ChainEntry {
 	lastCrawled?: string;
 }
 
+export interface ChainSummary {
+	name: string;
+	chainId: string;
+	bech32Prefix: string;
+	endpointCount: number;
+	rpcCount: number;
+	restCount: number;
+	source: 'chain-registry';
+	timestamp?: number;
+	lastUpdated?: string;
+	lastCrawled?: string;
+}
+
 export interface NetInfo {
 	peers: Peer[];
 }

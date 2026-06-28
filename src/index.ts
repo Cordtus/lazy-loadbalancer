@@ -12,6 +12,7 @@ import {
 	proxyWithCaching,
 } from './balancer.ts';
 import { flushCache, getCacheStats } from './cacheManager.ts';
+import { summarizeChains } from './chainSummary.ts';
 import config from './config.ts';
 import { crawlAllChains, crawlNetwork } from './crawler.ts';
 import dataService from './dataService.ts';
@@ -105,13 +106,7 @@ api.get('/chain-list', async (c) => {
 
 api.get('/chains-summary', async (c) => {
 	const chainsData = await dataService.loadChainsData();
-	const summary = Object.entries(chainsData).map(([name, data]) => ({
-		name,
-		endpointCount: data.rpcAddresses.length + (data.restAddresses?.length || 0),
-		rpcCount: data.rpcAddresses.length,
-		restCount: data.restAddresses?.length || 0,
-	}));
-	return c.json(summary);
+	return c.json(summarizeChains(chainsData));
 });
 
 api.get('/rpc-list/:chainName', async (c) => {
