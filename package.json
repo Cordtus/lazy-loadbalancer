@@ -14,8 +14,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "hono": "^4.6.0",
-    "vitest": "^4.0.14"
+    "@noble/ciphers": "^2.4.0",
+    "hono": "^4.6.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",

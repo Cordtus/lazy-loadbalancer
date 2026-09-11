@@ -216,7 +216,6 @@ describe('IBC link resolution', () => {
 				destination: 'osmosis',
 				chainsData,
 				fetchFn: fetchFn as typeof fetch,
-				now: () => 1700000000000,
 			})
 		).rejects.toThrow(/HTTP 503/);
 	});

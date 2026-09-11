@@ -1,38 +1,28 @@
 import { lookup } from 'node:dns/promises';
 import { CircuitBreaker } from './circuitBreaker.ts';
 import config, { CONCURRENCY } from './config.ts';
-import dataService from './dataService.ts';
 import { crawlerLogger as logger } from './logger.ts';
+import { PEX_ENABLED, discoverPexPeers } from './pexDiscovery.ts';
 import type { CrawlResult, NetInfo, Peer, StatusResponse } from './types.ts';
-import { isPrivateIP, isValidUrl, normalizeUrl } from './utils.ts';
+import {
+	isPrivateIP,
+	isValidUrl,
+	loadBlacklistedIPs,
+	loadChainsData,
+	loadGoodIPs,
+	loadPorts,
+	loadRejectedIPs,
+	normalizeUrl,
+	saveBlacklistedIPs,
+	saveChainsData,
+	saveGoodIPs,
+	savePorts,
+	saveRejectedIPs,
+} from './utils.ts';
 
 const MAX_FAILURES = 10;
 const MAX_DEPTH = config.crawler.maxDepth || 3;
 const MIN_REQUEST_INTERVAL_MS = 100;
-
-// Full list of known RPC ports for initial endpoint checking
-// Order matters: most common first for faster discovery
-const RPC_PORTS_FULL = [
-	443, // HTTPS standard - many production endpoints
-	26657, // Tendermint default RPC port
-	80, // HTTP standard
-	36657, // Common custom port
-	26667, // Common variation
-	26677, // Common variation
-	22257, // Custom port
-	14657, // Custom port
-	58657, // Custom port
-	33657, // Custom port
-	53657, // Custom port
-	37657, // Custom port
-	31657, // Custom port
-	10157, // Custom port
-	27957, // Custom port
-	2401, // Custom port
-	15957, // Custom port
-	8080, // HTTP alternate
-	8000, // HTTP alternate
-];
 
 // Minimal ports for peer scanning - most peers only expose RPC on standard ports
 // This dramatically reduces scan time since most peer IPs don't have RPC at all
@@ -113,16 +103,6 @@ function isValidRpcPort(port: number): boolean {
 	return true;
 }
 
-// Get ports for peer scanning - use minimal list for speed
-function getPeerScanPorts(): number[] {
-	return PEER_SCAN_PORTS;
-}
-
-// Get full port list for initial endpoint expansion
-function getFullRpcPorts(): number[] {
-	return RPC_PORTS_FULL;
-}
-
 // Rate limiter: track last request time per host
 const hostLastRequest = new Map<string, number>();
 
@@ -165,23 +145,6 @@ async function resolveDomain(domain: string): Promise<string[]> {
 	} catch (err) {
 		logger.debug(`DNS resolution failed for ${domain}`, err);
 		return [];
-	}
-}
-
-// HTTPS probe for non-standard ports
-async function probeHttps(host: string, port: number): Promise<boolean> {
-	const url = `https://${host}:${port}/status`;
-	logger.debug(`HTTPS probe: ${url}`);
-	try {
-		const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
-		const isHttps = response.ok || response.status < 500;
-		logger.debug(`HTTPS probe ${url}: ${isHttps ? 'success' : 'failed'}`, {
-			status: response.status,
-		});
-		return isHttps;
-	} catch (err) {
-		logger.debug(`HTTPS probe ${url}: failed`, err);
-		return false;
 	}
 }
 
@@ -303,15 +266,32 @@ function extractHost(addr: string): string | null {
 	return stripped || null;
 }
 
-function extractPeerInfo(peers: Peer[]): { peers: ExtractedPeer[]; newPorts: number[] } {
-	const existingPorts = dataService.loadPorts();
+function extractPeerInfo(peers: Peer[]): {
+	peers: ExtractedPeer[];
+	newPorts: number[];
+	pexSeeds: string[];
+} {
+	const existingPorts = loadPorts();
 	const newPorts: number[] = [];
 	const hosts = new Set<string>();
 	const results: ExtractedPeer[] = [];
+	const pexSeeds: string[] = [];
 
 	logger.debug(`Extracting peer info from ${peers.length} peers`);
 
 	for (const peer of peers) {
+		// P2P seed for the PEX crawler: nodeID@host:p2pPort
+		const nodeId = peer.node_info?.id;
+		const listenAddr = peer.node_info?.listen_addr || '';
+		const p2pPort = extractPort(listenAddr);
+		let p2pHost = extractHost(listenAddr);
+		// Some RPC proxies report remote_ip with a port or as 0.0.0.0; extractHost normalizes both.
+		if (p2pHost && isNonRoutable(p2pHost)) p2pHost = extractHost(peer.remote_ip || '');
+		if (nodeId && p2pHost && p2pPort && !isNonRoutable(p2pHost) && !isPrivateIP(p2pHost)) {
+			const seed = `${nodeId}@${p2pHost}:${p2pPort}`;
+			if (!pexSeeds.includes(seed)) pexSeeds.push(seed);
+		}
+
 		// Extract ports from ALL address fields
 		const addressFields = [
 			peer.node_info?.other?.rpc_address,
@@ -371,12 +351,12 @@ function extractPeerInfo(peers: Peer[]): { peers: ExtractedPeer[]; newPorts: num
 	// Save any new ports discovered
 	if (newPorts.length > 0) {
 		const allPorts = [...existingPorts, ...newPorts];
-		dataService.savePorts(allPorts);
+		savePorts(allPorts);
 		logger.info(`Discovered ${newPorts.length} new ports: ${newPorts.join(', ')}`);
 	}
 
 	logger.info(`Extracted ${results.length} unique hosts from ${peers.length} peers`);
-	return { peers: results, newPorts };
+	return { peers: results, newPorts, pexSeeds };
 }
 
 export const _test_extractPeerInfo = extractPeerInfo;
@@ -386,6 +366,7 @@ interface EndpointCheckResult {
 	chainId: string | null;
 	url: string;
 	peers: ExtractedPeer[];
+	pexSeeds: string[];
 	depth: number;
 	nodeId: string | null;
 	moniker: string | null;
@@ -404,7 +385,16 @@ async function checkEndpointWithDepth(
 	const normalized = normalizeUrl(url);
 	if (!normalized) {
 		logger.debug(`Invalid URL, skipping: ${url}`);
-		return { isValid: false, chainId: null, url, peers: [], depth, nodeId: null, moniker: null };
+		return {
+			isValid: false,
+			chainId: null,
+			url,
+			peers: [],
+			pexSeeds: [],
+			depth,
+			nodeId: null,
+			moniker: null,
+		};
 	}
 
 	const parsed = new URL(normalized);
@@ -426,6 +416,7 @@ async function checkEndpointWithDepth(
 				chainId: null,
 				url: normalized,
 				peers: [],
+				pexSeeds: [],
 				depth,
 				nodeId: null,
 				moniker: null,
@@ -450,11 +441,13 @@ async function checkEndpointWithDepth(
 		});
 
 		let peers: ExtractedPeer[] = [];
+		let pexSeeds: string[] = [];
 		if (isHealthy && depth < MAX_DEPTH) {
 			const netInfo = await fetchNetInfo(normalized);
 			if (netInfo?.peers) {
 				const extracted = extractPeerInfo(netInfo.peers);
 				peers = extracted.peers;
+				pexSeeds = extracted.pexSeeds;
 				logger.info(
 					`[depth ${depth}] ${normalized} returned ${netInfo.peers.length} peers, extracted ${peers.length} valid hosts`
 				);
@@ -463,7 +456,16 @@ async function checkEndpointWithDepth(
 			}
 		}
 
-		return { isValid: isHealthy, chainId, url: normalized, peers, depth, nodeId, moniker };
+		return {
+			isValid: isHealthy,
+			chainId,
+			url: normalized,
+			peers,
+			pexSeeds,
+			depth,
+			nodeId,
+			moniker,
+		};
 	} catch (err) {
 		logger.error(`[depth ${depth}] Error checking ${normalized}`, err);
 		return {
@@ -471,6 +473,7 @@ async function checkEndpointWithDepth(
 			chainId: null,
 			url: normalized,
 			peers: [],
+			pexSeeds: [],
 			depth,
 			nodeId: null,
 			moniker: null,
@@ -529,74 +532,73 @@ async function checkHostPort(
 	return null;
 }
 
-async function checkPeerEndpoints(
-	peers: ExtractedPeer[],
-	expectedChainId: string
-): Promise<string[]> {
-	const validEndpoints: string[] = [];
-	const checkedCombos = new Set<string>();
-	const foundHosts = new Set<string>(); // Track hosts with valid endpoints
-
-	logger.info(`Checking peer endpoints for ${peers.length} hosts (chainId: ${expectedChainId})`);
-
-	// Expand peers with resolved IPs for domains
-	const expandedPeers: ExtractedPeer[] = [];
+async function expandPeersWithIps(
+	peers: ExtractedPeer[]
+): Promise<{ hosts: ExtractedPeer[]; domainToIps: Map<string, string[]> }> {
+	const hosts: ExtractedPeer[] = [];
 	const domainToIps = new Map<string, string[]>();
 
 	for (const peer of peers) {
-		expandedPeers.push(peer);
+		hosts.push(peer);
 		if (!peer.isIp) {
 			const ips = await resolveDomain(peer.host);
 			if (ips.length > 0) {
 				domainToIps.set(peer.host, ips);
 				for (const ip of ips) {
-					if (!expandedPeers.some((p) => p.host === ip)) {
-						expandedPeers.push({ host: ip, isIp: true });
-						logger.debug(`Added resolved IP ${ip} for domain ${peer.host}`);
+					if (!hosts.some((p) => p.host === ip)) {
+						hosts.push({ host: ip, isIp: true });
 					}
 				}
 			}
 		}
 	}
 
-	logger.info(
-		`Expanded ${peers.length} peers to ${expandedPeers.length} hosts (after DNS resolution)`
-	);
+	return { hosts, domainToIps };
+}
 
-	// Use minimal port list for peer scanning - most peers don't expose RPC at all
-	const scanPorts = getPeerScanPorts();
-	logger.info(`Scanning ${scanPorts.length} common RPC ports across ${expandedPeers.length} hosts`);
+// Port-first scan: probe every host on each port, in batches, stopping early once
+// a host has a working endpoint. `probe` decides what an endpoint looks like.
+async function scanPeers(
+	peers: ExtractedPeer[],
+	expectedChainId: string,
+	ports: number[],
+	probe: (
+		host: string,
+		port: number,
+		isIp: boolean,
+		expectedChainId: string
+	) => Promise<string | null>,
+	label: string
+): Promise<string[]> {
+	const validEndpoints: string[] = [];
+	const checked = new Set<string>();
+	const foundHosts = new Set<string>();
+	const { hosts, domainToIps } = await expandPeersWithIps(peers);
 
-	// PORT-FIRST ITERATION: For each port, check all hosts
-	// This avoids rate limiting by spreading requests across hosts
-	for (const port of scanPorts) {
-		// Filter to hosts we haven't found endpoints for yet
-		const hostsToCheck = expandedPeers.filter((peer) => {
-			if (foundHosts.has(peer.host)) return false; // Already found
+	logger.info(`Scanning ${ports.length} ${label} ports across ${hosts.length} hosts`);
+
+	for (const port of ports) {
+		const hostsToCheck = hosts.filter((peer) => {
+			if (foundHosts.has(peer.host)) return false;
 			const comboKey = `${peer.host}:${port}`;
-			if (checkedCombos.has(comboKey)) return false;
-			checkedCombos.add(comboKey);
+			if (checked.has(comboKey)) return false;
+			checked.add(comboKey);
 			return true;
 		});
 
 		if (hostsToCheck.length === 0) continue;
 
-		logger.info(`Port ${port}: checking ${hostsToCheck.length} remaining hosts`);
-
-		// Process hosts in batches for concurrency
 		const batchSize = CONCURRENCY.CRAWLER_PEERS;
 		for (let i = 0; i < hostsToCheck.length; i += batchSize) {
 			const batch = hostsToCheck.slice(i, i + batchSize);
 
 			const batchResults = await Promise.all(
 				batch.map(async (peer) => {
-					// Double-check in case another batch found it
 					if (foundHosts.has(peer.host)) return null;
 
-					const endpoint = await checkHostPort(peer.host, port, peer.isIp, expectedChainId);
+					const endpoint = await probe(peer.host, port, peer.isIp, expectedChainId);
 					if (endpoint) {
 						foundHosts.add(peer.host);
-						// Also mark domain as found if this was a resolved IP
 						for (const [domain, ips] of domainToIps) {
 							if (ips.includes(peer.host)) {
 								foundHosts.add(domain);
@@ -609,115 +611,30 @@ async function checkPeerEndpoints(
 			);
 
 			for (const endpoint of batchResults) {
-				if (endpoint) {
-					validEndpoints.push(endpoint);
-				}
-			}
-		}
-
-		// Early exit if we've found endpoints for all hosts
-		if (foundHosts.size >= expandedPeers.length) {
-			logger.info('Found endpoints for all hosts, stopping port scan early');
-			break;
-		}
-	}
-
-	logger.info(`Peer endpoint check complete: found ${validEndpoints.length} valid endpoints`);
-	return validEndpoints;
-}
-
-async function checkPeerRestEndpoints(
-	peers: ExtractedPeer[],
-	expectedChainId: string
-): Promise<string[]> {
-	const validEndpoints: string[] = [];
-	const checkedCandidates = new Set<string>();
-	const foundHosts = new Set<string>();
-
-	logger.info(`Checking REST endpoints for ${peers.length} hosts (chainId: ${expectedChainId})`);
-
-	const expandedPeers: ExtractedPeer[] = [];
-	const domainToIps = new Map<string, string[]>();
-
-	for (const peer of peers) {
-		expandedPeers.push(peer);
-		if (!peer.isIp) {
-			const ips = await resolveDomain(peer.host);
-			if (ips.length > 0) {
-				domainToIps.set(peer.host, ips);
-				for (const ip of ips) {
-					if (!expandedPeers.some((p) => p.host === ip)) {
-						expandedPeers.push({ host: ip, isIp: true });
-						logger.debug(`Added resolved IP ${ip} for REST domain ${peer.host}`);
-					}
-				}
-			}
-		}
-	}
-
-	logger.info(
-		`Expanded ${peers.length} REST peers to ${expandedPeers.length} hosts (after DNS resolution)`
-	);
-
-	for (const port of REST_SCAN_PORTS) {
-		const hostsToCheck = expandedPeers.filter((peer) => {
-			if (foundHosts.has(peer.host)) return false;
-			return true;
-		});
-
-		if (hostsToCheck.length === 0) continue;
-
-		logger.info(`REST port ${port}: checking ${hostsToCheck.length} remaining hosts`);
-
-		const batchSize = CONCURRENCY.CRAWLER_PEERS;
-		for (let i = 0; i < hostsToCheck.length; i += batchSize) {
-			const batch = hostsToCheck.slice(i, i + batchSize);
-
-			const batchResults = await Promise.all(
-				batch.map(async (peer) => {
-					if (foundHosts.has(peer.host)) return null;
-
-					const candidates = buildRestEndpointCandidates(peer.host, [port], peer.isIp).filter(
-						(candidate) => {
-							if (checkedCandidates.has(candidate)) return false;
-							checkedCandidates.add(candidate);
-							return true;
-						}
-					);
-
-					for (const candidate of candidates) {
-						const endpoint = await checkRestEndpoint(candidate, expectedChainId);
-						if (endpoint) {
-							foundHosts.add(peer.host);
-							for (const [domain, ips] of domainToIps) {
-								if (ips.includes(peer.host)) {
-									foundHosts.add(domain);
-									break;
-								}
-							}
-							return endpoint;
-						}
-					}
-
-					return null;
-				})
-			);
-
-			for (const endpoint of batchResults) {
 				if (endpoint && !validEndpoints.includes(endpoint)) {
 					validEndpoints.push(endpoint);
 				}
 			}
 		}
 
-		if (foundHosts.size >= expandedPeers.length) {
-			logger.info('Found REST endpoints for all hosts, stopping port scan early');
-			break;
-		}
+		if (foundHosts.size >= hosts.length) break;
 	}
 
-	logger.info(`REST endpoint check complete: found ${validEndpoints.length} valid endpoints`);
+	logger.info(`${label} peer endpoint check complete: found ${validEndpoints.length} endpoints`);
 	return validEndpoints;
+}
+
+async function checkRestHostPort(
+	host: string,
+	port: number,
+	isIp: boolean,
+	expectedChainId: string
+): Promise<string | null> {
+	for (const candidate of buildRestEndpointCandidates(host, [port], isIp)) {
+		const endpoint = await checkRestEndpoint(candidate, expectedChainId);
+		if (endpoint) return endpoint;
+	}
+	return null;
 }
 
 export async function crawlNetwork(
@@ -728,18 +645,19 @@ export async function crawlNetwork(
 	logger.info(`Initial URLs: ${initialRpcUrls.length}`);
 	logger.debug('Initial URLs list:', initialRpcUrls);
 
-	const chainsData = await dataService.loadChainsData();
+	const chainsData = loadChainsData();
 	const checkedUrls = new Set<string>();
 	const checkedHosts = new Set<string>();
 	const seenNodeIds = new Set<string>();
-	const rejectedIPs = new Set(dataService.loadRejectedIPs());
-	const goodIPs: Record<string, number> = dataService.loadGoodIPs();
-	const blacklistedIPs = await dataService.loadBlacklistedIPs();
+	const rejectedIPs = new Set(loadRejectedIPs());
+	const goodIPs: Record<string, number> = loadGoodIPs();
+	const blacklistedIPs = loadBlacklistedIPs();
 
 	let newEndpoints = 0;
 	let newRestEndpoints = 0;
 	let misplacedEndpoints = 0;
 	let skippedDuplicateNodes = 0;
+	let pexRan = false;
 
 	const expectedChainId = chainsData[chainName]?.chainId;
 	if (!expectedChainId) {
@@ -803,6 +721,7 @@ export async function crawlNetwork(
 							chainId: null,
 							url,
 							peers: [],
+							pexSeeds: [],
 							depth,
 							nodeId: null,
 							moniker: null,
@@ -815,6 +734,7 @@ export async function crawlNetwork(
 			// Collect all unique peers from this batch for a single combined scan
 			const batchPeers: ExtractedPeer[] = [];
 			const batchRestPeers: ExtractedPeer[] = [];
+			const batchPexSeeds = new Set<string>();
 			let maxDepthInBatch = 0;
 			const addRestPeer = (peer: ExtractedPeer): void => {
 				if (!batchRestPeers.some((item) => item.host === peer.host)) {
@@ -874,6 +794,8 @@ export async function crawlNetwork(
 							}
 							if (result.depth > maxDepthInBatch) maxDepthInBatch = result.depth;
 						}
+
+						for (const seed of result.pexSeeds) batchPexSeeds.add(seed);
 					} else if (result.chainId && chainsData[result.chainId]) {
 						if (!chainsData[result.chainId].rpcAddresses.includes(result.url)) {
 							chainsData[result.chainId].rpcAddresses.push(result.url);
@@ -914,7 +836,13 @@ export async function crawlNetwork(
 				logger.info(
 					`Batch peer scan: ${peersToScan.length} unique hosts (${batchPeers.length} total collected)`
 				);
-				const validEndpoints = await checkPeerEndpoints(peersToScan, expectedChainId);
+				const validEndpoints = await scanPeers(
+					peersToScan,
+					expectedChainId,
+					PEER_SCAN_PORTS,
+					checkHostPort,
+					'RPC'
+				);
 				for (const endpoint of validEndpoints) {
 					if (!checkedUrls.has(endpoint)) {
 						queue.push({ url: endpoint, depth: maxDepthInBatch + 1 });
@@ -928,7 +856,13 @@ export async function crawlNetwork(
 				logger.info(
 					`Batch REST scan: ${restPeersToScan.length} unique hosts (${batchRestPeers.length} total collected)`
 				);
-				const validRestEndpoints = await checkPeerRestEndpoints(restPeersToScan, expectedChainId);
+				const validRestEndpoints = await scanPeers(
+					restPeersToScan,
+					expectedChainId,
+					REST_SCAN_PORTS,
+					checkRestHostPort,
+					'REST'
+				);
 				for (const endpoint of validRestEndpoints) {
 					chainsData[chainName].restAddresses ||= [];
 					if (!chainsData[chainName].restAddresses.includes(endpoint)) {
@@ -940,24 +874,56 @@ export async function crawlNetwork(
 				logger.info(`Batch REST scan complete: saved ${validRestEndpoints.length} REST endpoints`);
 			}
 
+			// PEX augmentation: once, use the P2P seeds gathered from net_info to
+			// gossip a wider peer set than the RPC view exposes, then scan it.
+			if (PEX_ENABLED && !pexRan && batchPexSeeds.size > 0) {
+				pexRan = true;
+				const pexPeers = await discoverPexPeers({
+					seeds: [...batchPexSeeds].slice(0, 64),
+					network: expectedChainId,
+				});
+				if (pexPeers.length > 0) {
+					const hosts = pexPeers.map((p) => ({ host: p.ip, isIp: true }));
+					const [pexRpc, pexRest] = await Promise.all([
+						scanPeers(hosts, expectedChainId, PEER_SCAN_PORTS, checkHostPort, 'PEX-RPC'),
+						scanPeers(hosts, expectedChainId, REST_SCAN_PORTS, checkRestHostPort, 'PEX-REST'),
+					]);
+					for (const endpoint of pexRpc) {
+						if (!checkedUrls.has(endpoint)) {
+							queue.push({ url: endpoint, depth: 1 });
+						}
+					}
+					chainsData[chainName].restAddresses ||= [];
+					for (const endpoint of pexRest) {
+						if (!chainsData[chainName].restAddresses.includes(endpoint)) {
+							chainsData[chainName].restAddresses.push(endpoint);
+							newRestEndpoints++;
+						}
+					}
+					logger.info(
+						`PEX expansion: ${pexPeers.length} peers -> ${pexRpc.length} RPC, ${pexRest.length} REST endpoints`
+					);
+				}
+			}
+
 			// Periodic save
 			if (newEndpoints + newRestEndpoints > 0 && (newEndpoints + newRestEndpoints) % 10 === 0) {
 				logger.info(
 					`Periodic save: ${newEndpoints} new RPC endpoints, ${newRestEndpoints} new REST endpoints so far`
 				);
-				await dataService.saveChainsData(chainsData);
-				dataService.saveGoodIPs(goodIPs);
-				dataService.saveRejectedIPs([...rejectedIPs]);
-				await dataService.saveBlacklistedIPs(blacklistedIPs);
+				saveChainsData(chainsData);
+				saveGoodIPs(goodIPs);
+				saveRejectedIPs([...rejectedIPs]);
+				saveBlacklistedIPs(blacklistedIPs);
 			}
 		}
 	} catch (err) {
 		logger.error(`Unexpected error during crawl for ${chainName}`, err);
 	} finally {
-		await dataService.saveChainsData(chainsData);
-		dataService.saveGoodIPs(goodIPs);
-		dataService.saveRejectedIPs([...rejectedIPs]);
-		await dataService.saveBlacklistedIPs(blacklistedIPs);
+		saveChainsData(chainsData);
+		saveGoodIPs(goodIPs);
+		saveRejectedIPs([...rejectedIPs]);
+		saveBlacklistedIPs(blacklistedIPs);
 	}
 
 	const totalEndpoints = chainsData[chainName].rpcAddresses.length;
@@ -986,7 +952,7 @@ export async function crawlNetwork(
 export async function crawlAllChains(): Promise<Record<string, CrawlResult>> {
 	logger.info('=== Starting crawl for ALL chains ===');
 
-	const chainsData = await dataService.loadChainsData();
+	const chainsData = loadChainsData();
 	const results: Record<string, CrawlResult> = {};
 
 	const chainNames = Object.keys(chainsData);

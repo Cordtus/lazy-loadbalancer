@@ -12,25 +12,21 @@ import {
 	proxyWithCaching,
 } from './balancer.ts';
 import { flushCache, getCacheStats } from './cacheManager.ts';
+import { fetchChainsFromGitHub } from './chainRegistry.ts';
 import { summarizeChains } from './chainSummary.ts';
 import config from './config.ts';
 import { crawlAllChains, crawlNetwork } from './crawler.ts';
-import dataService from './dataService.ts';
 import { resolveIbcLinksFromChainRegistry } from './ibcLinks.ts';
 import { appLogger as logger } from './logger.ts';
 import SchedulerService from './scheduler.ts';
 import type { ChainConfig, GlobalConfig } from './types.ts';
+import { cleanupBlacklist, loadChainsData, saveChainsData } from './utils.ts';
 
 // App state
 let isInitialFetchComplete = false;
 let isHealthy = true;
 
-const scheduler = new SchedulerService({
-	isHealthy,
-	setHealthy: (healthy: boolean) => {
-		isHealthy = healthy;
-	},
-});
+const scheduler = new SchedulerService();
 
 // Create Hono app
 const app = new Hono();
@@ -101,12 +97,12 @@ app.get('/stats/:chain', (c) => {
 const api = new Hono();
 
 api.get('/chain-list', async (c) => {
-	const chainsData = await dataService.loadChainsData();
+	const chainsData = loadChainsData();
 	return c.json(Object.keys(chainsData));
 });
 
 api.get('/chains-summary', async (c) => {
-	const chainsData = await dataService.loadChainsData();
+	const chainsData = loadChainsData();
 	return c.json(summarizeChains(chainsData));
 });
 
@@ -118,7 +114,7 @@ api.get('/ibc-links', async (c) => {
 	}
 
 	try {
-		const chainsData = await dataService.loadChainsData();
+		const chainsData = loadChainsData();
 		const links = await resolveIbcLinksFromChainRegistry({
 			source,
 			destination,
@@ -141,7 +137,7 @@ api.get('/ibc-links', async (c) => {
 
 api.get('/rpc-list/:chainName', async (c) => {
 	const chainName = c.req.param('chainName');
-	const chainData = await dataService.getChain(chainName);
+	const chainData = loadChainsData()[chainName] ?? null;
 	if (!chainData) {
 		return c.json({ error: `Chain ${chainName} not found` }, 404);
 	}
@@ -156,7 +152,7 @@ api.get('/rpc-list/:chainName', async (c) => {
 
 api.post('/update-chain/:chainName', async (c) => {
 	const chainName = c.req.param('chainName');
-	const chainData = await dataService.getChain(chainName);
+	const chainData = loadChainsData()[chainName] ?? null;
 	if (!chainData) {
 		return c.json({ error: `Chain ${chainName} not found` }, 404);
 	}
@@ -185,7 +181,7 @@ api.post('/update-all-chains', async (c) => {
 api.post('/cleanup-blacklist', async (c) => {
 	try {
 		logger.info('Cleaning up blacklist');
-		const result = await dataService.cleanupBlacklist();
+		const result = cleanupBlacklist();
 		return c.json({ message: 'Blacklist cleanup completed', result });
 	} catch (err) {
 		logger.error('Error cleaning up blacklist', err);
@@ -214,12 +210,12 @@ api.post('/add-chain', async (c) => {
 		);
 	}
 
-	const existing = await dataService.getChain(chainName);
+	const existing = loadChainsData()[chainName] ?? null;
 	if (existing) {
 		return c.json({ error: `Chain ${chainName} already exists` }, 409);
 	}
 
-	const chainsData = await dataService.loadChainsData();
+	const chainsData = loadChainsData();
 	chainsData[chainName] = {
 		chainName,
 		chainId,
@@ -229,21 +225,21 @@ api.post('/add-chain', async (c) => {
 		timeout: '30s',
 	};
 
-	await dataService.saveChainsData(chainsData);
+	saveChainsData(chainsData);
 	logger.info(`Added chain: ${chainName}`);
 	return c.json({ message: `Chain ${chainName} added successfully` }, 201);
 });
 
 api.delete('/remove-chain/:chainName', async (c) => {
 	const chainName = c.req.param('chainName');
-	const chainsData = await dataService.loadChainsData();
+	const chainsData = loadChainsData();
 
 	if (!chainsData[chainName]) {
 		return c.json({ error: `Chain ${chainName} not found` }, 404);
 	}
 
 	delete chainsData[chainName];
-	await dataService.saveChainsData(chainsData);
+	saveChainsData(chainsData);
 	logger.info(`Removed chain: ${chainName}`);
 	return c.json({ message: `Chain ${chainName} removed successfully` });
 });
@@ -362,7 +358,7 @@ async function main() {
 	try {
 		logger.info('Fetching initial chain data...');
 		try {
-			await dataService.fetchChainsFromGitHub();
+			await fetchChainsFromGitHub();
 			isInitialFetchComplete = true;
 			logger.info('Initial chain fetch completed');
 		} catch (err) {

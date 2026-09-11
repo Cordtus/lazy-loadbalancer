@@ -121,14 +121,35 @@ Logs are stored in the `./logs` directory, with separate files for each module (
 - `src/`: Source code
   - `balancer.ts`: Main load balancing logic
   - `crawler.ts`: Network crawling and RPC/REST endpoint discovery
+  - `pexDiscovery.ts`: P2P/PEX peer gossip (native CometBFT client)
+  - `p2p/`: CometBFT secret connection, Merlin transcript, and PEX protocol
   - `index.ts`: Hono server, API routes, and load-balancer route
-  - `dataService.ts`: Registry fetch and JSON persistence
-  - `utils.ts`: Utility functions
+  - `chainRegistry.ts`: Fetch chain data from the cosmos chain-registry
+  - `chainSummary.ts`: Chain list summaries
+  - `ibcLinks.ts`: IBC channel link resolution
+  - `cacheManager.ts`: TTL cache and proxy response caching
+  - `circuitBreaker.ts`: Per-endpoint failure isolation
+  - `config.ts`: Config service and route/chain config
+  - `scheduler.ts`: Periodic refresh and crawl tasks
+  - `utils.ts`: File/IP/URL helpers and JSON persistence
   - `types.ts`: TypeScript type definitions
   - `logger.ts`: Logging configuration
 - `data/`: JSON files for chain data and IP lists
 - `logs/`: Log files
 - `tests/`: Bun tests using vitest-style APIs
+
+## PEX Peer Discovery
+
+RPC `/net_info` only exposes a node's direct peers. Once per crawl the crawler
+also derives CometBFT P2P seeds (`nodeID@host:p2pPort`) from those peers and
+speaks the P2P protocol natively (X25519 secret connection, MConnection framing,
+PEX `PexRequest`/`PexAddrs`) to gossip a wider peer set, which is then probed
+through the same RPC/REST scan. It is best-effort and can be tuned or disabled:
+
+```bash
+PEX_ENABLED=true             # default; set false to skip
+PEX_TIMEOUT=45               # seconds, default 45
+```
 
 ## Contributing
 

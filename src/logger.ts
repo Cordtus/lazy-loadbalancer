@@ -4,20 +4,15 @@ import { join } from 'node:path';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-const LOG_LEVELS: Record<LogLevel, number> = {
-	debug: 0,
-	info: 1,
-	warn: 2,
-	error: 3,
-};
+const LOG_LEVELS: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
 
-const COLORS = {
-	debug: '\x1b[36m', // cyan
-	info: '\x1b[32m', // green
-	warn: '\x1b[33m', // yellow
-	error: '\x1b[31m', // red
-	reset: '\x1b[0m',
+const COLORS: Record<LogLevel, string> = {
+	debug: '\x1b[36m',
+	info: '\x1b[32m',
+	warn: '\x1b[33m',
+	error: '\x1b[31m',
 };
+const RESET = '\x1b[0m';
 
 const logDir = join(process.cwd(), 'logs');
 if (!existsSync(logDir)) {
@@ -39,39 +34,24 @@ class Logger {
 		const today = new Date().toISOString().split('T')[0];
 		if (this.currentLogDate !== today || !this.fileHandle) {
 			this.fileHandle?.end();
-			const logPath = join(logDir, `${this.name}-${today}.log`);
-			this.fileHandle = Bun.file(logPath).writer();
+			this.fileHandle = Bun.file(join(logDir, `${this.name}-${today}.log`)).writer();
 			this.currentLogDate = today;
 		}
 		return this.fileHandle;
 	}
 
-	private format(level: LogLevel, message: string, meta?: unknown): string {
-		const ts = new Date().toISOString();
-		const metaStr = meta ? ` ${JSON.stringify(meta)}` : '';
-		return `${ts} [${level.toUpperCase()}] [${this.name}] ${message}${metaStr}`;
-	}
-
 	private log(level: LogLevel, message: string, meta?: unknown): void {
 		if (LOG_LEVELS[level] < this.minLevel) return;
 
-		const formatted = this.format(level, message, meta);
-		const coloredLevel = `${COLORS[level]}[${level.toUpperCase()}]${COLORS.reset}`;
-		const consoleMsg = `${new Date().toISOString()} ${coloredLevel} [${this.name}] ${message}`;
+		const line = `${new Date().toISOString()} [${level.toUpperCase()}] [${this.name}] ${message}`;
+		console[level === 'debug' ? 'log' : level](
+			`${new Date().toISOString()} ${COLORS[level]}[${level.toUpperCase()}]${RESET} [${this.name}] ${message}`,
+			meta ?? ''
+		);
 
-		// Console output
-		if (level === 'error') {
-			console.error(consoleMsg, meta ?? '');
-		} else if (level === 'warn') {
-			console.warn(consoleMsg, meta ?? '');
-		} else {
-			console.log(consoleMsg, meta ?? '');
-		}
-
-		// File output
 		try {
 			const writer = this.getLogFile();
-			writer.write(`${formatted}\n`);
+			writer.write(`${line}${meta ? ` ${JSON.stringify(meta)}` : ''}\n`);
 			writer.flush();
 		} catch {
 			// Ignore file write errors
@@ -93,21 +73,10 @@ class Logger {
 	error(message: string, meta?: unknown): void {
 		this.log('error', message, meta);
 	}
-
-	setLevel(level: LogLevel): void {
-		this.minLevel = LOG_LEVELS[level];
-	}
-
-	close(): void {
-		this.fileHandle?.end();
-		this.fileHandle = null;
-	}
 }
 
-// Create loggers with env-configurable levels
 const getLogLevel = (name: string): LogLevel => {
-	const envKey = `LOG_LEVEL_${name.toUpperCase()}`;
-	const level = process.env[envKey] || process.env.LOG_LEVEL || 'info';
+	const level = process.env[`LOG_LEVEL_${name.toUpperCase()}`] || process.env.LOG_LEVEL || 'info';
 	return level as LogLevel;
 };
 

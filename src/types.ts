@@ -138,32 +138,20 @@ export interface EndpointStats {
 	lastSeen?: number;
 }
 
-export type LbStrategyType =
-	| 'round-robin'
-	| 'weighted'
-	| 'least-connections'
-	| 'random'
-	| 'ip-hash';
+export type LbStrategyType = 'weighted';
 
 export interface LbStrategy {
 	type: LbStrategyType;
 	options?: Record<string, unknown>;
 }
 
-export interface EndpointFilters {
-	whitelist?: string[];
-	blacklist?: string[];
-}
-
 export interface RouteConfig {
 	path: string;
 	strategy?: LbStrategy;
-	filters?: EndpointFilters;
 	caching?: {
 		enabled: boolean;
 		ttl: number;
 	};
-	sticky?: boolean;
 	timeoutMs?: number;
 	retries?: number;
 	backoffMultiplier?: number;
@@ -171,12 +159,10 @@ export interface RouteConfig {
 
 export interface ChainConfig {
 	defaultStrategy: LbStrategy;
-	defaultFilters?: EndpointFilters;
 	defaultCaching?: {
 		enabled: boolean;
 		ttl: number;
 	};
-	defaultSticky?: boolean;
 	defaultTimeoutMs?: number;
 	defaultRetries?: number;
 	defaultBackoffMultiplier?: number;
@@ -210,18 +196,12 @@ export interface CleanupResult {
 
 export interface ScheduledTask {
 	name: string;
-	schedule: string;
+	intervalMs: number;
 	handler: () => Promise<void> | void;
 	enabled: boolean;
 	lastRun?: Date;
 	nextRun?: Date;
 	description?: string;
-}
-
-export enum CircuitState {
-	CLOSED = 'CLOSED',
-	OPEN = 'OPEN',
-	HALF_OPEN = 'HALF_OPEN',
 }
 
 // GitHub API response types
