@@ -161,17 +161,6 @@ class ConfigService {
 		return this.chainConfigs.get(chainName) || this.globalConfig.chains[chainName] || null;
 	}
 
-	createDefaultChainConfig(_chainName: string): ChainConfig {
-		return {
-			defaultStrategy: this.globalConfig.defaultStrategy,
-			defaultTimeoutMs: this.globalConfig.defaultTimeoutMs,
-			defaultRetries: this.globalConfig.defaultRetries,
-			defaultBackoffMultiplier: this.globalConfig.defaultBackoffMultiplier,
-			defaultCaching: { ...this.globalConfig.defaultCaching },
-			routes: [],
-		};
-	}
-
 	saveChainConfig(chainName: string, config: ChainConfig): void {
 		const configPath = join(CHAIN_CONFIG_DIR, `${chainName}.json`);
 		Bun.write(configPath, JSON.stringify(config, null, 2));
@@ -212,8 +201,6 @@ class ConfigService {
 			backoffMultiplier:
 				chainConfig?.defaultBackoffMultiplier || this.globalConfig.defaultBackoffMultiplier,
 			caching: chainConfig?.defaultCaching || this.globalConfig.defaultCaching,
-			sticky: chainConfig?.defaultSticky || false,
-			filters: chainConfig?.defaultFilters,
 		};
 
 		return routeConfig ? { ...defaultRoute, ...routeConfig } : defaultRoute;

@@ -25,7 +25,6 @@ interface ResolveFromRegistryOptions {
 	destination: string;
 	chainsData: Record<string, ChainEntry>;
 	fetchFn?: typeof fetch;
-	now?: () => number;
 }
 
 const IBC_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -185,11 +184,8 @@ async function fetchJson<T>(url: string, fetchFn: typeof fetch): Promise<T> {
 	return (await response.json()) as T;
 }
 
-async function fetchIbcDirectory(
-	fetchFn: typeof fetch,
-	now: () => number
-): Promise<GithubContent[]> {
-	if (directoryCache && directoryCache.expiresAt > now()) {
+async function fetchIbcDirectory(fetchFn: typeof fetch): Promise<GithubContent[]> {
+	if (directoryCache && directoryCache.expiresAt > Date.now()) {
 		return directoryCache.files;
 	}
 
@@ -199,18 +195,17 @@ async function fetchIbcDirectory(
 	);
 	directoryCache = {
 		files,
-		expiresAt: now() + IBC_CACHE_TTL_MS,
+		expiresAt: Date.now() + IBC_CACHE_TTL_MS,
 	};
 	return files;
 }
 
 async function fetchIbcFile(
 	file: GithubContent,
-	fetchFn: typeof fetch,
-	now: () => number
+	fetchFn: typeof fetch
 ): Promise<RegistryFileInput> {
 	const cached = fileCache.get(file.name);
-	if (cached && cached.expiresAt > now()) {
+	if (cached && cached.expiresAt > Date.now()) {
 		return { name: file.name, data: cached.data };
 	}
 
@@ -218,7 +213,7 @@ async function fetchIbcFile(
 	const data = await fetchJson<IbcRegistryFile>(url, fetchFn);
 	fileCache.set(file.name, {
 		data,
-		expiresAt: now() + IBC_CACHE_TTL_MS,
+		expiresAt: Date.now() + IBC_CACHE_TTL_MS,
 	});
 	return { name: file.name, data };
 }
@@ -228,7 +223,6 @@ export async function resolveIbcLinksFromChainRegistry({
 	destination,
 	chainsData,
 	fetchFn = fetch,
-	now = () => Date.now(),
 }: ResolveFromRegistryOptions): Promise<IbcLinkResolutionResult> {
 	const sourceName = resolveChainAlias(source, chainsData);
 	if (!sourceName) {
@@ -240,11 +234,11 @@ export async function resolveIbcLinksFromChainRegistry({
 		throw new Error(`Unknown destination chain: ${destination}`);
 	}
 
-	const directory = await fetchIbcDirectory(fetchFn, now);
+	const directory = await fetchIbcDirectory(fetchFn);
 	const candidates = directory.filter((file) =>
 		isCandidateIbcFile(file.name, sourceName, destinationName)
 	);
-	const files = await Promise.all(candidates.map((file) => fetchIbcFile(file, fetchFn, now)));
+	const files = await Promise.all(candidates.map((file) => fetchIbcFile(file, fetchFn)));
 
 	return resolveIbcLinksFromRegistryFiles({
 		source: sourceName,

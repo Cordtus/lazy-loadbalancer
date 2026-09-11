@@ -1,10 +1,10 @@
-import { cacheManager, getCacheStats, sessionCache } from './cacheManager.ts';
+import { cacheManager, getCacheStats } from './cacheManager.ts';
 import { CircuitBreaker } from './circuitBreaker.ts';
 import config from './config.ts';
-import dataService from './dataService.ts';
 import { balancerLogger as logger } from './logger.ts';
 // Load balancer using Bun's native fetch
-import type { ChainEntry, EndpointStats, LbStrategy, RouteConfig } from './types.ts';
+import type { ChainEntry, EndpointStats } from './types.ts';
+import { loadChainsData } from './utils.ts';
 
 let chainsData: Record<string, ChainEntry> = {};
 
@@ -81,7 +81,7 @@ export function buildTargetUrl(baseAddress: string, requestPath: string): string
 }
 
 export async function initChainsData(): Promise<void> {
-	chainsData = await dataService.loadChainsData();
+	chainsData = loadChainsData();
 }
 
 export function getChainsData(): Record<string, ChainEntry> {
@@ -99,12 +99,8 @@ class LoadBalancer {
 		this.endpoints[index].weight = weight;
 	}
 	private endpoints: EndpointStats[];
-	private currentIndex = 0;
-	private strategy: LbStrategy;
-	private routeConfig: RouteConfig | null;
-	private activeConnections = new Map<string, number>();
 
-	constructor(addresses: string[], strategy: LbStrategy, routeConfig: RouteConfig | null) {
+	constructor(addresses: string[]) {
 		this.endpoints = addresses.map((address) => ({
 			address,
 			weight: 1,
@@ -112,122 +108,16 @@ class LoadBalancer {
 			successCount: 0,
 			failureCount: 0,
 		}));
-		this.strategy = strategy;
-		this.routeConfig = routeConfig;
 	}
 
-	selectNextEndpoint(clientIp: string, chainName: string): string {
-		let filtered = [...this.endpoints];
-
-		// Apply whitelist/blacklist filters
-		if (this.routeConfig?.filters) {
-			const { whitelist, blacklist } = this.routeConfig.filters;
-
-			if (whitelist?.length) {
-				filtered = filtered.filter((e) => whitelist.some((p) => this.matchPattern(e.address, p)));
-			}
-
-			if (blacklist?.length) {
-				filtered = filtered.filter((e) => !blacklist.some((p) => this.matchPattern(e.address, p)));
-			}
-		}
-
-		if (filtered.length === 0) {
-			filtered = this.endpoints;
-			logger.warn('Filtered list empty, falling back to all endpoints');
-		}
-
-		// Sticky sessions
-		if (this.routeConfig?.sticky) {
-			const sessionKey = `${chainName}:${clientIp}`;
-			const existing = sessionCache.get(sessionKey) as string | undefined;
-			if (existing) {
-				const found = filtered.find((e) => e.address === existing);
-				if (found) return found.address;
-			}
-			const selected = this.selectByStrategy(filtered, clientIp);
-			sessionCache.set(sessionKey, selected);
-			return selected;
-		}
-
-		return this.selectByStrategy(filtered, clientIp);
-	}
-
-	private matchPattern(address: string, pattern: string): boolean {
-		if (pattern.includes('*') || pattern.includes('?')) {
-			const regex = new RegExp(
-				`^${pattern.replace(/\./g, '\\.').replace(/\*/g, '.*').replace(/\?/g, '.')}$`
-			);
-			return regex.test(address);
-		}
-		return address.includes(pattern);
-	}
-
-	private selectByStrategy(endpoints: EndpointStats[], clientIp: string): string {
-		switch (this.strategy.type) {
-			case 'round-robin':
-				return this.roundRobin(endpoints);
-			case 'weighted':
-				return this.weighted(endpoints);
-			case 'least-connections':
-				return this.leastConnections(endpoints);
-			case 'random':
-				return this.random(endpoints);
-			case 'ip-hash':
-				return this.ipHash(endpoints, clientIp);
-			default:
-				return this.weighted(endpoints);
-		}
-	}
-
-	private roundRobin(endpoints: EndpointStats[]): string {
-		const selected = endpoints[this.currentIndex % endpoints.length];
-		this.currentIndex = (this.currentIndex + 1) % endpoints.length;
-		return selected.address;
-	}
-
-	private weighted(endpoints: EndpointStats[]): string {
-		const totalWeight = endpoints.reduce((sum, e) => sum + e.weight, 0);
+	selectNextEndpoint(): string {
+		const totalWeight = this.endpoints.reduce((sum, e) => sum + e.weight, 0);
 		let random = Math.random() * totalWeight;
-
-		for (const endpoint of endpoints) {
+		for (const endpoint of this.endpoints) {
 			random -= endpoint.weight;
 			if (random <= 0) return endpoint.address;
 		}
-		return endpoints[0].address;
-	}
-
-	private leastConnections(endpoints: EndpointStats[]): string {
-		let min = Number.MAX_SAFE_INTEGER;
-		let selected = endpoints[0];
-
-		for (const endpoint of endpoints) {
-			const conns = this.activeConnections.get(endpoint.address) || 0;
-			if (conns < min) {
-				min = conns;
-				selected = endpoint;
-			}
-		}
-
-		this.activeConnections.set(
-			selected.address,
-			(this.activeConnections.get(selected.address) || 0) + 1
-		);
-		return selected.address;
-	}
-
-	private random(endpoints: EndpointStats[]): string {
-		return endpoints[Math.floor(Math.random() * endpoints.length)].address;
-	}
-
-	private ipHash(endpoints: EndpointStats[], clientIp: string): string {
-		// Simple hash function
-		let hash = 0;
-		for (let i = 0; i < clientIp.length; i++) {
-			hash = (hash << 5) - hash + clientIp.charCodeAt(i);
-			hash |= 0;
-		}
-		return endpoints[Math.abs(hash) % endpoints.length].address;
+		return this.endpoints[0].address;
 	}
 
 	updateStats(address: string, responseTime: number, success: boolean): void {
@@ -248,12 +138,6 @@ class LoadBalancer {
 		const successRate = endpoint.successCount / (endpoint.successCount + endpoint.failureCount + 1);
 		const normalizedRt = Math.min(responseTime, 5000) / 5000;
 		endpoint.weight = successRate * 0.7 + (1 - normalizedRt) * 0.3;
-
-		// Decrement connection count for least-connections
-		const conns = this.activeConnections.get(address) || 0;
-		if (conns > 0) {
-			this.activeConnections.set(address, conns - 1);
-		}
 	}
 
 	getStats(): EndpointStats[] {
@@ -266,7 +150,7 @@ const circuitBreakers = new Map<string, CircuitBreaker>();
 
 export function selectNextEndpoint(
 	chain: string,
-	clientIp: string,
+	_clientIp: string,
 	path: string,
 	kind: EndpointKind = inferEndpointKind(path)
 ): string {
@@ -284,17 +168,10 @@ export function selectNextEndpoint(
 
 	const chainBalancers = loadBalancers.get(chain)!;
 	if (!chainBalancers.has(routeKey)) {
-		chainBalancers.set(
-			routeKey,
-			new LoadBalancer(addresses, routeConfig.strategy || { type: 'weighted' }, routeConfig)
-		);
+		chainBalancers.set(routeKey, new LoadBalancer(addresses));
 	}
 
-	return chainBalancers.get(routeKey)!.selectNextEndpoint(clientIp, chain);
-}
-
-export function selectNextRPC(chain: string, clientIp: string, path: string): string {
-	return selectNextEndpoint(chain, clientIp, path, 'rpc');
+	return chainBalancers.get(routeKey)!.selectNextEndpoint();
 }
 
 export async function proxyRequest(

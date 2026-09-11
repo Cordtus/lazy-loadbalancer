@@ -403,6 +403,14 @@ describe('Crawler Peer Extraction', () => {
 			expect(new Set(hosts)).toEqual(new Set(expectedHosts));
 		});
 
+		it('should derive P2P seeds for the PEX crawler', () => {
+			const { pexSeeds } = extractPeerInfo(mockPeers);
+			expect(pexSeeds).toContain('node1id@1.2.3.4:26656');
+			expect(pexSeeds.some((seed) => seed.startsWith('node2id@'))).toBe(true);
+			// Private listen_addrs are never used as PEX seeds
+			expect(pexSeeds.some((seed) => seed.startsWith('node3id@'))).toBe(false);
+		});
+
 		it('should filter out localhost variations', () => {
 			const localhostPeers = mockPeers.filter(
 				(p) => p.remote_ip.toLowerCase() === 'localhost' || p.remote_ip === '127.0.0.1'
