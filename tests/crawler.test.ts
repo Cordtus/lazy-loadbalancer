@@ -1,9 +1,11 @@
 // tests/crawler.test.ts
+import net from 'node:net';
 import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	buildRestEndpointCandidates,
 	_test_extractPeerInfo as extractPeerInfo,
 	parseRestNodeInfoChainId,
+	_test_tcpReachable as tcpReachable,
 } from '../src/crawler';
 import type { NetInfo, Peer, StatusResponse } from '../src/types';
 import { isPrivateIP, normalizeUrl } from '../src/utils';
@@ -653,6 +655,19 @@ describe('REST Endpoint Discovery Helpers', () => {
 		).toBe('osmosis-1');
 
 		expect(parseRestNodeInfoChainId({})).toBeNull();
+	});
+});
+
+describe('TCP reachability probe', () => {
+	it('detects open and closed ports on loopback', async () => {
+		const server = net.createServer();
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const port = (server.address() as net.AddressInfo).port;
+
+		expect(await tcpReachable('127.0.0.1', port)).toBe(true);
+
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		expect(await tcpReachable('127.0.0.1', port)).toBe(false);
 	});
 });
 
