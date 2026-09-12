@@ -1,4 +1,5 @@
 import { lookup } from 'node:dns/promises';
+import net from 'node:net';
 import { CircuitBreaker } from './circuitBreaker.ts';
 import config, { CONCURRENCY } from './config.ts';
 import { crawlerLogger as logger } from './logger.ts';
@@ -23,6 +24,8 @@ import {
 const MAX_FAILURES = 10;
 const MAX_DEPTH = config.crawler.maxDepth || 3;
 const MIN_REQUEST_INTERVAL_MS = 100;
+// Cheap TCP pre-check so closed/blackholed ports don't burn a full HTTP timeout.
+const TCP_PROBE_TIMEOUT_MS = 2000;
 
 // Minimal ports for peer scanning - most peers only expose RPC on standard ports
 // This dramatically reduces scan time since most peer IPs don't have RPC at all
@@ -192,6 +195,25 @@ async function fetchNetInfo(url: string): Promise<NetInfo | null> {
 	return data?.result ?? null;
 }
 
+function tcpReachable(host: string, port: number): Promise<boolean> {
+	return new Promise((resolve) => {
+		const socket = net.connect({ host, port });
+		let settled = false;
+		const finish = (reachable: boolean): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			socket.destroy();
+			resolve(reachable);
+		};
+		const timer = setTimeout(() => finish(false), TCP_PROBE_TIMEOUT_MS);
+		socket.once('connect', () => finish(true));
+		socket.once('error', () => finish(false));
+	});
+}
+
+export const _test_tcpReachable = tcpReachable;
+
 export async function checkRestEndpoint(
 	url: string,
 	expectedChainId: string
@@ -199,6 +221,13 @@ export async function checkRestEndpoint(
 	const normalized = normalizeUrl(url);
 	if (!normalized) {
 		logger.debug(`Invalid REST URL, skipping: ${url}`);
+		return null;
+	}
+
+	const parsed = new URL(normalized);
+	const port = Number(parsed.port) || (parsed.protocol === 'https:' ? 443 : 80);
+	if (!(await tcpReachable(parsed.hostname, port))) {
+		logger.debug(`REST port closed: ${parsed.hostname}:${port}`);
 		return null;
 	}
 
@@ -493,6 +522,11 @@ async function checkHostPort(
 		await new Promise((r) => setTimeout(r, MIN_REQUEST_INTERVAL_MS));
 	}
 	markHostRequested(host);
+
+	if (!(await tcpReachable(host, port))) {
+		logger.debug(`TCP closed: ${host}:${port}, skipping`);
+		return null;
+	}
 
 	// Determine protocol based on port and host type
 	let protocols: string[];
