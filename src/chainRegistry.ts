@@ -3,6 +3,20 @@ import { appLogger as logger } from './logger.ts';
 import type { ChainEntry, ChainRegistryData, GithubContent } from './types.ts';
 import { saveChainsData } from './utils.ts';
 
+// Registry peers are `{ id, address }` where address is `host:port`; PEX wants
+// `nodeID@host:port`, so join them and drop incomplete entries.
+export function extractP2pSeeds(peers: ChainRegistryData['peers']): string[] {
+	const seeds: string[] = [];
+	for (const section of [peers?.seeds, peers?.persistent_peers]) {
+		for (const peer of section ?? []) {
+			const id = typeof peer?.id === 'string' ? peer.id.trim() : '';
+			const address = typeof peer?.address === 'string' ? peer.address.trim() : '';
+			if (id && address) seeds.push(`${id}@${address}`);
+		}
+	}
+	return [...new Set(seeds)];
+}
+
 async function fetchChainFromGithub(chainName: string): Promise<ChainEntry | null> {
 	const url = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/master/${chainName}/chain.json`;
 
@@ -22,6 +36,7 @@ async function fetchChainFromGithub(chainName: string): Promise<ChainEntry | nul
 
 		const rpcAddresses = (data.apis?.rpc || []).map((r) => r.address).filter(Boolean);
 		const restAddresses = (data.apis?.rest || []).map((r) => r.address).filter(Boolean);
+		const p2pSeeds = extractP2pSeeds(data.peers);
 
 		if (rpcAddresses.length === 0 && restAddresses.length === 0) {
 			logger.warn(`No RPC or REST addresses for chain: ${chainName}`);
@@ -34,6 +49,7 @@ async function fetchChainFromGithub(chainName: string): Promise<ChainEntry | nul
 			bech32Prefix: data.bech32_prefix,
 			rpcAddresses,
 			restAddresses,
+			p2pSeeds,
 			timeout: '30s',
 			timestamp: Date.now(),
 		};

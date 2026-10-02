@@ -2,9 +2,12 @@
 import net from 'node:net';
 import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+	buildExpandedPorts,
 	buildRestEndpointCandidates,
 	_test_extractPeerInfo as extractPeerInfo,
 	parseRestNodeInfoChainId,
+	_test_scanPeers as scanPeers,
+	_test_tcpProbe as tcpProbe,
 	_test_tcpReachable as tcpReachable,
 } from '../src/crawler';
 import type { NetInfo, Peer, StatusResponse } from '../src/types';
@@ -384,7 +387,7 @@ describe('Crawler Peer Extraction', () => {
 				'210.220.230.240',
 				'11.22.33.44',
 				'55.66.77.88',
-				'001.002.003.004',
+				// '001.002.003.004' is now filtered as an ambiguous leading-zero address
 				'111.112.113.114',
 				'121.131.141.151',
 				'161.171.181.191',
@@ -582,6 +585,29 @@ describe('Crawler Peer Extraction', () => {
 			expect(isPrivateIP('1.2.3.4')).toBe(false);
 			expect(isPrivateIP('100.200.100.200')).toBe(false);
 		});
+
+		it('should filter loopback, link-local, CGNAT, reserved and leading-zero addresses', () => {
+			expect(isPrivateIP('127.0.0.1')).toBe(true);
+			expect(isPrivateIP('169.254.10.10')).toBe(true);
+			expect(isPrivateIP('100.64.0.1')).toBe(true); // CGNAT
+			expect(isPrivateIP('0.0.0.0')).toBe(true);
+			expect(isPrivateIP('240.0.0.1')).toBe(true); // reserved
+			expect(isPrivateIP('001.002.003.004')).toBe(true);
+			// hostnames still pass through
+			expect(isPrivateIP('rpc.example.com')).toBe(false);
+		});
+	});
+
+	describe('TCP probe classification', () => {
+		it('reports open, refused (closed) and silent (dark) ports', async () => {
+			const server = net.createServer();
+			await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+			const openPort = (server.address() as net.AddressInfo).port;
+			expect(await tcpProbe('127.0.0.1', openPort)).toBe('open');
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			// Nothing listening on the now-closed port -> actively refused.
+			expect(await tcpProbe('127.0.0.1', openPort)).toBe('closed');
+		});
 	});
 
 	describe('URL normalization', () => {
@@ -641,6 +667,19 @@ describe('REST Endpoint Discovery Helpers', () => {
 		]);
 	});
 
+	it('should derive sibling api/rest/lcd hosts from an rpc host', () => {
+		const candidates = buildRestEndpointCandidates('rpc.example.com', [443], false);
+		expect(candidates).toContain('https://rpc.example.com');
+		expect(candidates).toContain('https://api.example.com');
+		expect(candidates).toContain('https://rest.example.com');
+		expect(candidates).toContain('https://lcd.example.com');
+
+		// No substitution for a host that is not rpc-prefixed.
+		expect(buildRestEndpointCandidates('api.example.com', [443], false)).toEqual([
+			'https://api.example.com',
+		]);
+	});
+
 	it('should extract chain IDs from Cosmos SDK REST node_info responses', () => {
 		expect(
 			parseRestNodeInfoChainId({
@@ -655,6 +694,79 @@ describe('REST Endpoint Discovery Helpers', () => {
 		).toBe('osmosis-1');
 
 		expect(parseRestNodeInfoChainId({})).toBeNull();
+	});
+});
+
+describe('Expanded RPC port generation', () => {
+	it('generates digit variations, permutations and reversals of 26657', () => {
+		const ports = buildExpandedPorts(26657);
+		expect(ports).toContain(26607);
+		expect(ports).toContain(36657);
+		expect(ports).toContain(25667);
+		expect(ports).toContain(62567);
+		expect(ports).not.toContain(26657);
+		expect(ports.every((p) => p >= 80 && p <= 65535)).toBe(true);
+		// Closest-to-standard candidates sort first.
+		expect(ports[0]).toBeLessThan(26700);
+	});
+});
+
+describe('scanPeers expanded sweep', () => {
+	const makePeer = (host: string) => ({ host, isIp: true });
+
+	it('still probes generated ports when the priority sweep already found most hosts', async () => {
+		const probed: string[] = [];
+		// Every host answers on the priority port 443, so the expanded sweep
+		// must still run for the one host that does not.
+		const probe = async (host: string, port: number) => {
+			probed.push(`${host}:${port}`);
+			const hit = port === 443 ? host !== '3.3.3.3' : port === 26607 && host === '3.3.3.3';
+			return { endpoint: hit ? `http://${host}:${port}` : null, dark: false };
+		};
+
+		const found = await scanPeers(
+			[makePeer('1.1.1.1'), makePeer('2.2.2.2'), makePeer('3.3.3.3')],
+			'chain-1',
+			[443],
+			probe,
+			'test',
+			{ expandedPorts: [26607, 36657] }
+		);
+
+		expect(probed).toContain('3.3.3.3:26607');
+		expect(found).toContain('http://3.3.3.3:26607');
+	});
+
+	it('prunes a host after consecutive dark ports', async () => {
+		const portsForDarkHost: number[] = [];
+		// 2.2.2.2 is silent on every expanded port; 1.1.1.1 never goes dark.
+		const probe = async (host: string, port: number) => {
+			if (host === '1.1.1.1') return { endpoint: null, dark: false };
+			portsForDarkHost.push(port);
+			return { endpoint: null, dark: true };
+		};
+
+		await scanPeers([makePeer('1.1.1.1'), makePeer('2.2.2.2')], 'chain-1', [], probe, 'test', {
+			expandedPorts: [26607, 26617, 26627, 26637, 26647, 26657],
+		});
+
+		// DARK_THRESHOLD is 3: after the third dark port the host is pruned.
+		expect(portsForDarkHost).toEqual([26607, 26617, 26627]);
+	});
+
+	it('stops the expanded sweep when the deadline has passed', async () => {
+		const probed: number[] = [];
+		const probe = async (_host: string, port: number) => {
+			probed.push(port);
+			return { endpoint: null, dark: false };
+		};
+
+		await scanPeers([makePeer('1.1.1.1')], 'chain-1', [443], probe, 'test', {
+			expandedPorts: [26607, 26617, 26627],
+			deadline: Date.now() - 1,
+		});
+
+		expect(probed).not.toContain(26607);
 	});
 });
 

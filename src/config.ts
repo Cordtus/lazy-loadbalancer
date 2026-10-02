@@ -217,6 +217,15 @@ class ConfigService {
 // Singleton
 const configService = new ConfigService();
 
+// Parse a non-negative integer env var, falling back when unset/invalid.
+// Exported so PEX's tuning knobs honor an explicit 0 rather than defaulting.
+export function envInt(name: string, fallback: number): number {
+	const raw = process.env[name];
+	if (raw === undefined || raw === '') return fallback;
+	const n = Number(raw);
+	return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 // Static config from env
 export const staticConfig = {
 	port: Number(process.env.PORT) || 3000,
@@ -231,6 +240,10 @@ export const staticConfig = {
 		retries: Number(process.env.CRAWLER_RETRIES) || RETRY_CONFIG.CRAWLER_RETRIES,
 		retryDelay: Number(process.env.CRAWLER_RETRY_DELAY) || RETRY_CONFIG.CRAWLER_RETRY_DELAY,
 		maxDepth: Number(process.env.CRAWLER_MAX_DEPTH) || 3,
+		// Cap on generated non-standard RPC ports swept per live host (0 disables).
+		expandedPorts: envInt('CRAWLER_EXPANDED_PORTS', 40),
+		// Consecutive "dark" (timeout) ports before a host is dropped in the expanded sweep.
+		darkThreshold: envInt('CRAWLER_DARK_THRESHOLD', 3),
 	},
 };
 
