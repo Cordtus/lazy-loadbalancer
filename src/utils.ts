@@ -195,12 +195,24 @@ export function cleanupBlacklist(): CleanupResult {
 	};
 }
 
+// Returns true for anything we should not probe: RFC1918 private space,
+// loopback, link-local, CGNAT, multicast/reserved, and ambiguous leading-zero
+// octets (e.g. 001.002.003.004). Hostnames return false so they pass through.
 export function isPrivateIP(ip: string): boolean {
 	const parts = ip.split('.');
 	if (parts.length !== 4) return false;
-	const [first, second] = parts.map((p) => Number.parseInt(p, 10));
+	// Leading zeros make the address ambiguous; treat as non-routable.
+	if (parts.some((p) => p.length > 1 && p.startsWith('0'))) return true;
+	const nums = parts.map((p) => Number(p));
+	if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+	const [first, second] = nums;
 	return (
+		first === 0 || // "this network"
 		first === 10 ||
+		first === 127 || // loopback
+		first >= 224 || // multicast / reserved
+		(first === 100 && second >= 64 && second <= 127) || // CGNAT
+		(first === 169 && second === 254) || // link-local
 		(first === 172 && second >= 16 && second <= 31) ||
 		(first === 192 && second === 168)
 	);

@@ -6,6 +6,9 @@ export interface ChainEntry {
 	bech32Prefix: string;
 	rpcAddresses: string[];
 	restAddresses?: string[];
+	// P2P seeds (nodeID@host:port) from the chain registry; used to seed PEX and
+	// to probe the hosts for RPC before any /net_info peer is seen.
+	p2pSeeds?: string[];
 	timeout?: string;
 	timestamp?: number;
 	lastUpdated?: string;
@@ -218,5 +221,9 @@ export interface ChainRegistryData {
 	apis?: {
 		rpc?: Array<{ address: string }>;
 		rest?: Array<{ address: string }>;
+	};
+	peers?: {
+		seeds?: Array<{ id?: string; address?: string }>;
+		persistent_peers?: Array<{ id?: string; address?: string }>;
 	};
 }

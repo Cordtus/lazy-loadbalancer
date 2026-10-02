@@ -142,13 +142,33 @@ Logs are stored in the `./logs` directory, with separate files for each module (
 
 RPC `/net_info` only exposes a node's direct peers. Once per crawl the crawler
 also derives CometBFT P2P seeds (`nodeID@host:p2pPort`) from those peers and
-speaks the P2P protocol natively (X25519 secret connection, MConnection framing,
-PEX `PexRequest`/`PexAddrs`) to gossip a wider peer set, which is then probed
-through the same RPC/REST scan. It is best-effort and can be tuned or disabled:
+from the chain registry's `peers.seeds`/`persistent_peers`, then speaks the P2P
+protocol natively (X25519 secret connection, MConnection framing, PEX
+`PexRequest`/`PexAddrs`) to gossip a wider peer set, which is then probed
+through the same RPC/REST scan.
+
+Discovery is breadth-first: each peer is queried several times (a single
+`PexRequest` only returns a random subset of its address book), newly gossiped
+peers are dialed in the next round, and failed dials are retried. It is
+best-effort and can be tuned or disabled:
 
 ```bash
 PEX_ENABLED=true             # default; set false to skip
 PEX_TIMEOUT=45               # seconds, default 45
+PEX_MAX_QUERIES=3            # PexRequests per peer
+PEX_MAX_DIALS=256            # total dial budget per crawl
+PEX_DIAL_ATTEMPTS=2          # dial retries per peer
+PEX_CONCURRENCY=16           # parallel dials
+```
+
+Non-standard RPC ports are also swept on hosts that stay dark on the common
+ports, using digit variations of `26657` (e.g. `26607`, `36657`, `25667`). This
+sweep is gated by a TCP liveness check and pruned when a host times out
+repeatedly, so it stays bounded:
+
+```bash
+CRAWLER_EXPANDED_PORTS=40    # generated ports per live host; 0 disables
+CRAWLER_DARK_THRESHOLD=3     # consecutive timeouts before a host is pruned
 ```
 
 ## Contributing
