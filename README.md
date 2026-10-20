@@ -5,152 +5,76 @@ Dynamically fetches, caches, and crawls Cosmos SDK RPC and REST endpoints on all
 Inspired by the work of Jacob Gadikian and [Eco-stake](https://ecologi.com/ecostake), this tool combines [Notional](https://notional.ventures/)'s [RPC crawler](https://github.com/notional-labs) logic, and the [cosmos.directory](https://cosmos.directory) Load balanced proxy endpoint created by "Tom". 
 It is intended as a personal load balancer / unified endpoint for multiple Cosmos-SDK / IBC chain API endpoints. 
 
+## Requirements
 
+- [Bun](https://bun.sh) >= 1.1.0
 
-## Prerequisites
-
-- Bun (>=1.1.0)
-
-
-## Setup
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/Cordtus/lazy-loadbalancer.git
-   cd lazy-loadbalancer
-   ```
-
-2. Install dependencies:
-   ```bash
-   bun install
-   ```
-
-3. Create a `.env` file with your GitHub personal access token:
-   ```bash
-   echo "GITHUB_PAT=your_github_personal_access_token" > .env
-   ```
-
-4. Build the project:
-   ```bash
-   bun run build
-   ```
-
-5. Start the server:
-   ```bash
-   bun run start
-   ```
-
-## Development Commands
+## Quick start
 
 ```bash
-bun run dev       # Start the Hono server with watch mode
-bun test          # Run Bun tests with vitest-style test APIs
-bun run lint      # Run Biome checks for src and tests
-bun run format    # Format src and tests with Biome
-bun run build     # Bundle src/index.ts for Bun
+bun install
+bun start          # or: bun run dev for watch mode
 ```
 
-## Usage
+Runs on `http://localhost:3000` (set `PORT` to change). On startup it loads the chain list from [cosmos/chain-registry](https://github.com/cosmos/chain-registry), refreshes it every 12h, and crawls endpoints every 24h (the first crawl is 24h after startup). The registry fetch is unauthenticated, so a rate-limited first run falls back to existing `data/`.
 
-### Chain Management
-
-1. Fetch registry data and update all chains:
-   ```bash
-   curl -X POST http://localhost:3000/api/update-all-chains
-   ```
-
-2. Crawl and update a specific chain:
-   ```bash
-   curl -X POST http://localhost:3000/api/update-chain/osmosis
-   ```
-
-### Chain Information
-
-1. Get a list of all chains:
-   ```bash
-   curl http://localhost:3000/api/chain-list
-   ```
-
-2. Get a summary of all chains with RPC and REST endpoint counts:
-   ```bash
-   curl http://localhost:3000/api/chains-summary
-   ```
-
-3. Resolve IBC channel links between two chains by chain name or chain ID:
-   ```bash
-   curl 'http://localhost:3000/api/ibc-links?source=genesis_29-2&destination=osmosis-1'
-   ```
-
-   The response is sorted with preferred live registry links first and includes
-   source-side channel/port, counterparty channel/port, connection, client, and
-   chain ID metadata.
-
-4. Get endpoint lists for a specific chain:
-   ```bash
-   curl http://localhost:3000/api/rpc-list/osmosis
-   ```
-
-### Universal Load-Balancing Requests
-
-To send a load-balanced RPC or REST request to any chain, use the following format:
+## Load-balanced proxy
 
 ```bash
-curl -X [METHOD] http://localhost:3000/lb/[CHAIN]/[ENDPOINT]
-```
+curl http://localhost:3000/lb/<chain>/<rpc-method-or-rest-path>
 
-For example, to get the status of the Osmosis chain:
-
-```bash
 curl http://localhost:3000/lb/osmosis/status
-```
-
-For a Cosmos SDK REST call, use the REST path directly:
-
-```bash
 curl http://localhost:3000/lb/cosmoshub/ibc/apps/transfer/v1/channels/channel-141/ports/transfer/escrow_address
 ```
 
-The load balancer routes known Tendermint RPC method paths to `rpcAddresses` and Cosmos SDK REST paths such as `cosmos/...`, `ibc/...`, and `cosmwasm/...` to `restAddresses`.
+- `/lb/:chain/*` selects from the chain's endpoint pool. The first path segment decides the pool: Tendermint RPC names (`status`, `block`, `tx`, `abci_query`, `net_info`, `validators`, ...) use `rpcAddresses`; anything else uses `restAddresses`. If the chosen pool is empty, the other one is used.
+- Endpoints are chosen by weight (success rate and latency). Failed attempts retry (randomly, so an endpoint may repeat), and endpoints with an open circuit breaker are skipped.
+- Only a 2xx response with a JSON body counts as success. GET requests, plus POST bodies containing `block`, `tx`, `validators`, or `status`, are cached; other requests go straight to the upstream.
+- There is no authentication and it binds all interfaces; put it behind a trusted network or reverse proxy before exposing it.
 
-## Logging
+## API
 
-Logs are stored in the `./logs` directory, with separate files for each module (balancer, crawler, api).
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/` | Service info |
+| GET | `/health` | Health (503 when degraded), cache stats, scheduler tasks, memory |
+| GET | `/stats` | Per-chain, per-route endpoint stats |
+| GET | `/stats/:chain` | Stats for one chain |
+| GET | `/api/chain-list` | Chain names |
+| GET | `/api/chains-summary` | Chains with RPC/REST endpoint counts |
+| GET | `/api/rpc-list/:chain` | Full RPC and REST endpoint lists |
+| GET | `/api/ibc-links?source=&destination=` | IBC channel links between two chains (name or chain ID) |
+| POST | `/api/update-chain/:chain` | Crawl and update one chain (blocking) |
+| POST | `/api/update-all-chains` | Crawl and update every chain (blocking) |
+| POST | `/api/add-chain` | Add a chain (requires `chainName`, `chainId`, `bech32Prefix`, and `rpcAddresses` or `restAddresses`; 409 if it exists) |
+| DELETE | `/api/remove-chain/:chain` | Remove a chain |
+| POST | `/api/cleanup-blacklist` | Prune old blacklisted IPs |
+| GET/PUT | `/config/global` | Global strategy, timeout, retry, and cache defaults |
+| GET/PUT | `/config/chain/:chain` | Per-chain config overrides |
+| DELETE | `/cache/:chain/:path?` | Flush cached responses for a chain/path |
 
-## Directory Structure
+## Configuration
 
-- `src/`: Source code
-  - `balancer.ts`: Main load balancing logic
-  - `crawler.ts`: Network crawling and RPC/REST endpoint discovery
-  - `pexDiscovery.ts`: P2P/PEX peer gossip (native CometBFT client)
-  - `p2p/`: CometBFT secret connection, Merlin transcript, and PEX protocol
-  - `index.ts`: Hono server, API routes, and load-balancer route
-  - `chainRegistry.ts`: Fetch chain data from the cosmos chain-registry
-  - `chainSummary.ts`: Chain list summaries
-  - `ibcLinks.ts`: IBC channel link resolution
-  - `cacheManager.ts`: TTL cache and proxy response caching
-  - `circuitBreaker.ts`: Per-endpoint failure isolation
-  - `config.ts`: Config service and route/chain config
-  - `scheduler.ts`: Periodic refresh and crawl tasks
-  - `utils.ts`: File/IP/URL helpers and JSON persistence
-  - `types.ts`: TypeScript type definitions
-  - `logger.ts`: Logging configuration
-- `data/`: JSON files for chain data and IP lists
-- `logs/`: Log files
-- `tests/`: Bun tests using vitest-style APIs
+Environment variables (all optional):
 
-## PEX Peer Discovery
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP listen port |
+| `REQUEST_TIMEOUT` | `12000` | Fallback proxy timeout in ms (`global.json` `defaultTimeoutMs`, default `5000`, takes precedence) |
+| `CRAWLER_TIMEOUT` | `3000` | Per-request crawl timeout in ms |
+| `CRAWLER_RETRIES` | `3` | Crawl request retries |
+| `CRAWLER_RETRY_DELAY` | `1000` | Base retry delay in ms, capped at `1000` |
+| `CRAWLER_MAX_DEPTH` | `3` | Peer-crawl depth |
+| `CRAWLER_EXPANDED_PORTS` | `40` | RPC ports swept per live host during the expanded sweep; `0` disables |
+| `CRAWLER_DARK_THRESHOLD` | `3` | Expanded sweep: consecutive timeouts before a host is dropped |
+| `NODE_ENV` | unset | `production` disables config hot reload and hides error details |
+| `LOG_LEVEL` / `LOG_LEVEL_APP` / `LOG_LEVEL_CRAWLER` / `LOG_LEVEL_BALANCER` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 
-RPC `/net_info` only exposes a node's direct peers. Once per crawl the crawler
-also derives CometBFT P2P seeds (`nodeID@host:p2pPort`) from those peers and
-from the chain registry's `peers.seeds`/`persistent_peers`, then speaks the P2P
-protocol natively (X25519 secret connection, MConnection framing, PEX
-`PexRequest`/`PexAddrs`) to gossip a wider peer set, which is then probed
-through the same RPC/REST scan.
+PEX settings are listed under [Peer discovery](#peer-discovery). Runtime config lives in `config/global.json` and `config/chains/<chain>.json`; edits are hot-reloaded outside production.
 
-Discovery is breadth-first: each peer is queried several times (a single
-`PexRequest` only returns a random subset of its address book), newly gossiped
-peers are dialed in the next round, and failed dials are retried. It is
-best-effort and can be tuned or disabled:
+## Peer discovery
+
+Beyond `/net_info`'s direct peers, the crawler derives CometBFT P2P seeds from the chain registry and gossips additional peers over PEX, then probes them through the same RPC/REST scan. Discovery is breadth-first, best-effort, and bounded; it can be tuned or disabled:
 
 ```bash
 PEX_ENABLED=true             # default; set false to skip
@@ -161,15 +85,25 @@ PEX_DIAL_ATTEMPTS=2          # dial retries per peer
 PEX_CONCURRENCY=16           # parallel dials
 ```
 
-Non-standard RPC ports are also swept on hosts that stay dark on the common
-ports, using digit variations of `26657` (e.g. `26607`, `36657`, `25667`). This
-sweep is gated by a TCP liveness check and pruned when a host times out
-repeatedly, so it stays bounded:
+RPC hosts that stay dark on the common ports get digit substitutions and permutations of `26657` (e.g. `26607`, `36657`, `25667`), closest-first, after a TCP liveness check, clipped to `CRAWLER_EXPANDED_PORTS`.
+
+## Development
 
 ```bash
-CRAWLER_EXPANDED_PORTS=40    # generated ports per live host; 0 disables
-CRAWLER_DARK_THRESHOLD=3     # consecutive timeouts before a host is pruned
+bun run dev       # watch mode
+bun test          # tests
+bun run lint      # Biome check
+bun run format    # Biome format
+bun run build     # bundle to dist/
 ```
+
+## Project layout
+
+- `src/`: application code
+- `config/`: `global.json` (tracked) and per-chain runtime config
+- `data/`: generated chain data and metadata; git-ignored
+- `logs/`: per-module daily logs; git-ignored
+- `tests/`: tests run with `bun test`
 
 ## Contributing
 
