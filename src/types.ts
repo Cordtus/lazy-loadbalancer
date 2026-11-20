@@ -9,6 +9,8 @@ export interface ChainEntry {
 	// P2P seeds (nodeID@host:port) from the chain registry; used to seed PEX and
 	// to probe the hosts for RPC before any /net_info peer is seen.
 	p2pSeeds?: string[];
+	// RPC endpoints whose earliest block height is 1 (full-history archive nodes).
+	archiveRpcAddresses?: string[];
 	timeout?: string;
 	timestamp?: number;
 	lastUpdated?: string;
@@ -22,6 +24,7 @@ export interface ChainSummary {
 	endpointCount: number;
 	rpcCount: number;
 	restCount: number;
+	archiveCount: number;
 	source: 'chain-registry';
 	timestamp?: number;
 	lastUpdated?: string;
@@ -122,6 +125,7 @@ export interface StatusResponse {
 		sync_info: {
 			latest_block_time: string;
 			latest_block_height: string;
+			earliest_block_height?: string | number;
 		};
 	};
 }
@@ -190,6 +194,7 @@ export interface CrawlResult {
 	misplacedEndpoints: number;
 	newRestEndpoints?: number;
 	totalRestEndpoints?: number;
+	archiveEndpoints?: number;
 }
 
 export interface CleanupResult {

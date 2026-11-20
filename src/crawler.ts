@@ -3,7 +3,7 @@ import net from 'node:net';
 import { CircuitBreaker } from './circuitBreaker.ts';
 import config, { CONCURRENCY } from './config.ts';
 import { crawlerLogger as logger } from './logger.ts';
-import { PEX_ENABLED, PEX_TIMEOUT_SEC, discoverPexPeers } from './pexDiscovery.ts';
+import { PEX_ENABLED, PEX_TIMEOUT_SEC, type PexPeer, discoverPexPeers } from './pexDiscovery.ts';
 import type { CrawlResult, NetInfo, Peer, StatusResponse } from './types.ts';
 import {
 	isPrivateIP,
@@ -51,6 +51,9 @@ const REST_SCAN_PORTS = [
 const DARK_THRESHOLD = config.crawler.darkThreshold || 3;
 // A host is worth an expensive expanded sweep only if it looks like a live node.
 const LIVENESS_PORTS = [26656, 26657, 443];
+// Cap HTTP probes of open ports after a full scan so a host with many non-RPC
+// listeners cannot overrun the crawl deadline.
+const FULL_SCAN_MAX_OPEN_PROBES = 20;
 
 // Generated non-standard RPC ports: single-digit variations, permutations and
 // reversals of the standard 26657 (e.g. 26607, 36657, 25667, 75662). Sorted by
@@ -97,6 +100,13 @@ interface ProbeResult {
 	endpoint: string | null;
 	// True only when the port was silent (timeout), not actively refused.
 	dark: boolean;
+}
+
+// A node whose earliest block is height 1 keeps the full chain history
+// (archive node). `/status` returns it as a string, but accept a number too.
+export function isArchiveStatus(response: StatusResponse | null | undefined): boolean {
+	const raw = response?.result?.sync_info?.earliest_block_height;
+	return raw !== undefined && raw !== null && String(raw) === '1';
 }
 
 export function parseRestNodeInfoChainId(response: unknown): string | null {
@@ -273,27 +283,47 @@ async function fetchNetInfo(url: string): Promise<NetInfo | null> {
 
 // Distinguishes an actively refused port from a silent (firewalled) one so the
 // expanded sweep can prune only the genuinely dark hosts.
-function tcpProbe(host: string, port: number): Promise<'open' | 'closed' | 'dark'> {
+function tcpProbe(
+	host: string,
+	port: number,
+	timeoutMs = TCP_PROBE_TIMEOUT_MS
+): Promise<'open' | 'closed' | 'dark'> {
 	return new Promise((resolve) => {
-		const socket = net.connect({ host, port });
-		let settled = false;
-		const finish = (status: 'open' | 'closed' | 'dark'): void => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			socket.destroy();
-			resolve(status);
+		let retried = false;
+		const connect = (): void => {
+			const socket = net.connect({ host, port });
+			let settled = false;
+			const finish = (status: 'open' | 'closed' | 'dark'): void => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				socket.destroy();
+				resolve(status);
+			};
+			const timer = setTimeout(() => finish('dark'), timeoutMs);
+			socket.once('connect', () => finish('open'));
+			socket.once('error', (err: Error & { code?: string }) => {
+				// fd exhaustion is our limit, not the peer's: retry once and warn.
+				if ((err.code === 'EMFILE' || err.code === 'ENFILE') && !retried) {
+					retried = true;
+					settled = true;
+					clearTimeout(timer);
+					socket.destroy();
+					setTimeout(connect, 50);
+					return;
+				}
+				if (err.code === 'EMFILE' || err.code === 'ENFILE') {
+					logger.warn(`tcpProbe hit file-descriptor exhaustion for ${host}:${port}`);
+				}
+				const refused =
+					err.code === 'ECONNREFUSED' ||
+					err.code === 'EHOSTUNREACH' ||
+					err.code === 'ENETUNREACH' ||
+					err.code === 'EADDRNOTAVAIL';
+				finish(refused ? 'closed' : 'dark');
+			});
 		};
-		const timer = setTimeout(() => finish('dark'), TCP_PROBE_TIMEOUT_MS);
-		socket.once('connect', () => finish('open'));
-		socket.once('error', (err: Error & { code?: string }) => {
-			const refused =
-				err.code === 'ECONNREFUSED' ||
-				err.code === 'EHOSTUNREACH' ||
-				err.code === 'ENETUNREACH' ||
-				err.code === 'EADDRNOTAVAIL';
-			finish(refused ? 'closed' : 'dark');
-		});
+		connect();
 	});
 }
 
@@ -308,8 +338,72 @@ async function isHostLive(host: string): Promise<boolean> {
 	return false;
 }
 
+// Drop gossiped PEX peers whose advertised P2P port actively refuses a
+// connection. Timeouts are ambiguous (firewalled-but-alive) and are kept.
+export async function filterReachablePexPeers(
+	peers: PexPeer[],
+	probe: (host: string, port: number) => Promise<'open' | 'closed' | 'dark'> = tcpProbe,
+	deadline?: number
+): Promise<{ kept: PexPeer[]; dropped: number }> {
+	const kept: PexPeer[] = [];
+	let dropped = 0;
+	const size = CONCURRENCY.CRAWLER_PEERS;
+	for (let i = 0; i < peers.length; i += size) {
+		if (deadline !== undefined && Date.now() > deadline) {
+			// Fail open: the remaining peers are unverified, so keep them.
+			kept.push(...peers.slice(i));
+			break;
+		}
+		const results = await Promise.all(
+			peers.slice(i, i + size).map(async (peer) => ({
+				peer,
+				status: await probe(peer.ip, peer.port),
+			}))
+		);
+		for (const { peer, status } of results) {
+			if (status === 'closed') dropped++;
+			else kept.push(peer);
+		}
+	}
+	return { kept, dropped };
+}
+
+export const _test_filterReachablePexPeers = filterReachablePexPeers;
+
 export const _test_tcpReachable = tcpReachable;
 export const _test_tcpProbe = tcpProbe;
+
+let allTcpPorts: number[] | null = null;
+function getAllTcpPorts(): number[] {
+	allTcpPorts ??= Array.from({ length: 65535 }, (_, i) => i + 1);
+	return allTcpPorts;
+}
+
+// Bounded TCP-connect scan over an explicit port list. Used by the opt-in
+// full-port sweep; tests pass a short list instead of all 65535 ports.
+async function scanPorts(
+	host: string,
+	ports: number[],
+	timeoutMs: number,
+	concurrency: number,
+	deadline?: number
+): Promise<number[]> {
+	const open: number[] = [];
+	let cursor = 0;
+	const worker = async (): Promise<void> => {
+		while (cursor < ports.length) {
+			if (deadline !== undefined && Date.now() > deadline) return;
+			const port = ports[cursor++];
+			if ((await tcpProbe(host, port, timeoutMs)) === 'open') open.push(port);
+		}
+	};
+	await Promise.all(
+		Array.from({ length: Math.min(Math.max(1, concurrency), ports.length) }, worker)
+	);
+	return open.sort((a, b) => a - b);
+}
+
+export const _test_scanPorts = scanPorts;
 
 export async function checkRestEndpoint(
 	url: string,
@@ -496,6 +590,7 @@ interface EndpointCheckResult {
 	depth: number;
 	nodeId: string | null;
 	moniker: string | null;
+	archive: boolean;
 }
 
 interface QueuedEndpoint {
@@ -520,6 +615,7 @@ async function checkEndpointWithDepth(
 			depth,
 			nodeId: null,
 			moniker: null,
+			archive: false,
 		};
 	}
 
@@ -546,12 +642,14 @@ async function checkEndpointWithDepth(
 				depth,
 				nodeId: null,
 				moniker: null,
+				archive: false,
 			};
 		}
 
 		const chainId = data.result.node_info?.network;
 		const nodeId = data.result.node_info?.id || null;
 		const moniker = data.result.node_info?.moniker || null;
+		const archive = isArchiveStatus(data);
 		const latestBlockTime = new Date(data.result.sync_info?.latest_block_time);
 		const timeDiff = Math.abs(Date.now() - latestBlockTime.getTime()) / 1000;
 		const isHealthy = timeDiff <= 60;
@@ -591,6 +689,7 @@ async function checkEndpointWithDepth(
 			depth,
 			nodeId,
 			moniker,
+			archive,
 		};
 	} catch (err) {
 		logger.error(`[depth ${depth}] Error checking ${normalized}`, err);
@@ -603,6 +702,7 @@ async function checkEndpointWithDepth(
 			depth,
 			nodeId: null,
 			moniker: null,
+			archive: false,
 		};
 	}
 }
@@ -708,7 +808,23 @@ async function scanPeers(
 		expectedChainId: string
 	) => Promise<ProbeResult>,
 	label: string,
-	options: { expandedPorts?: number[]; requireLiveForExpanded?: boolean; deadline?: number } = {}
+	options: {
+		expandedPorts?: number[];
+		requireLiveForExpanded?: boolean;
+		deadline?: number;
+		fullScan?: {
+			hosts: number;
+			timeoutMs: number;
+			concurrency: number;
+			seen?: Set<string>;
+			scanner?: (
+				host: string,
+				timeoutMs: number,
+				concurrency: number,
+				deadline?: number
+			) => Promise<number[]>;
+		};
+	} = {}
 ): Promise<string[]> {
 	const validEndpoints: string[] = [];
 	const checked = new Set<string>();
@@ -729,6 +845,20 @@ async function scanPeers(
 
 	const deadlineReached = (): boolean =>
 		options.deadline !== undefined && Date.now() > options.deadline;
+
+	const liveOnly = async (candidates: ExtractedPeer[]): Promise<ExtractedPeer[]> => {
+		const live = new Set<string>();
+		const size = CONCURRENCY.CRAWLER_PEERS;
+		for (let i = 0; i < candidates.length; i += size) {
+			if (deadlineReached()) break;
+			await Promise.all(
+				candidates.slice(i, i + size).map(async (peer) => {
+					if (await isHostLive(peer.host)) live.add(peer.host);
+				})
+			);
+		}
+		return candidates.filter((peer) => live.has(peer.host));
+	};
 
 	const sweep = async (
 		portList: number[],
@@ -803,23 +933,55 @@ async function scanPeers(
 	if (expanded.length > 0 && !deadlineReached()) {
 		let candidates = hosts.filter((peer) => !foundHosts.has(peer.host));
 		if (options.requireLiveForExpanded && candidates.length > 0) {
-			const live = new Set<string>();
-			const size = CONCURRENCY.CRAWLER_PEERS;
-			for (let i = 0; i < candidates.length; i += size) {
-				if (deadlineReached()) break;
-				await Promise.all(
-					candidates.slice(i, i + size).map(async (peer) => {
-						if (await isHostLive(peer.host)) live.add(peer.host);
-					})
-				);
-			}
-			candidates = candidates.filter((peer) => live.has(peer.host));
+			candidates = await liveOnly(candidates);
 		}
 		if (candidates.length > 0 && !deadlineReached()) {
 			logger.info(
 				`Expanded sweep: ${expanded.length} ports across ${candidates.length} live ${label} hosts`
 			);
 			await sweep(expanded, candidates, true);
+		}
+	}
+
+	// Opt-in last resort: full 1-65535 TCP scan of live IP hosts that still have
+	// no endpoint. Expensive, so bounded by host count, timeout, concurrency, a
+	// shared per-crawl seen-set, and the crawl deadline.
+	const full = options.fullScan;
+	if (full && full.hosts > 0 && !deadlineReached()) {
+		const scan =
+			full.scanner ??
+			((host, timeoutMs, concurrency, deadline) =>
+				scanPorts(host, getAllTcpPorts(), timeoutMs, concurrency, deadline));
+
+		// Domains are skipped: their IP siblings are already in the host list, and
+		// connecting by hostname would re-resolve DNS up to 65k times.
+		let targets = hosts.filter(
+			(peer) => !foundHosts.has(peer.host) && peer.isIp && !full.seen?.has(peer.host)
+		);
+		if (options.requireLiveForExpanded) targets = await liveOnly(targets);
+
+		let scanned = 0;
+		for (const peer of targets) {
+			if (scanned >= full.hosts || deadlineReached()) break;
+			full.seen?.add(peer.host);
+			scanned++;
+			logger.info(`Full port scan (${label}): ${peer.host}`);
+			const openPorts = await scan(peer.host, full.timeoutMs, full.concurrency, options.deadline);
+
+			let probedPorts = 0;
+			for (const port of openPorts) {
+				if (deadlineReached() || probedPorts >= FULL_SCAN_MAX_OPEN_PROBES) break;
+				const comboKey = `${peer.host}:${port}`;
+				if (checked.has(comboKey)) continue;
+				checked.add(comboKey);
+				probedPorts++;
+				const result = await probe(peer.host, port, peer.isIp, expectedChainId);
+				if (result.endpoint) {
+					markFound(peer.host);
+					if (!validEndpoints.includes(result.endpoint)) validEndpoints.push(result.endpoint);
+					break;
+				}
+			}
 		}
 	}
 
@@ -855,6 +1017,22 @@ function parseP2pHost(seed: string): string | null {
 
 export const _test_parseP2pHost = parseP2pHost;
 
+function rpcScanOptions(deadline: number, seen: Set<string>) {
+	return {
+		expandedPorts: EXPANDED_RPC_PORTS,
+		requireLiveForExpanded: true,
+		deadline,
+		fullScan: config.crawler.fullScan
+			? {
+					hosts: config.crawler.fullScanHosts,
+					timeoutMs: config.crawler.fullScanTimeoutMs,
+					concurrency: config.crawler.fullScanConcurrency,
+					seen,
+				}
+			: undefined,
+	};
+}
+
 export async function crawlNetwork(
 	chainName: string,
 	initialRpcUrls: string[]
@@ -875,6 +1053,7 @@ export async function crawlNetwork(
 	let newRestEndpoints = 0;
 	let misplacedEndpoints = 0;
 	let skippedDuplicateNodes = 0;
+	let archiveEndpoints = 0;
 	let pexRan = false;
 
 	const expectedChainId = chainsData[chainName]?.chainId;
@@ -895,6 +1074,8 @@ export async function crawlNetwork(
 	const startTime = Date.now();
 	const timeLimit = 5 * 60 * 1000;
 	const crawlDeadline = startTime + timeLimit;
+	// Shared across every scanPeers call in this crawl so no host is full-scanned twice.
+	const fullScannedHosts = new Set<string>();
 
 	const queue: QueuedEndpoint[] = initialRpcUrls
 		.map((url) => normalizeUrl(url))
@@ -926,11 +1107,7 @@ export async function crawlNetwork(
 				PEER_SCAN_PORTS,
 				checkHostPort,
 				'registry',
-				{
-					expandedPorts: EXPANDED_RPC_PORTS,
-					requireLiveForExpanded: true,
-					deadline: crawlDeadline,
-				}
+				rpcScanOptions(crawlDeadline, fullScannedHosts)
 			);
 			for (const endpoint of registryRpc) {
 				if (!checkedUrls.has(endpoint)) queue.push({ url: endpoint, depth: 0 });
@@ -994,6 +1171,7 @@ export async function crawlNetwork(
 							depth,
 							nodeId: null,
 							moniker: null,
+							archive: false,
 						};
 					}
 					return checkEndpointWithDepth(url, expectedChainId, depth);
@@ -1049,6 +1227,17 @@ export async function crawlNetwork(
 							);
 						} else {
 							logger.debug(`[depth ${result.depth}] Known endpoint: ${result.url}`);
+						}
+						if (result.archive) {
+							chainsData[chainName].archiveRpcAddresses ||= [];
+							const archives = chainsData[chainName].archiveRpcAddresses;
+							if (!archives.includes(result.url)) {
+								archives.push(result.url);
+								archiveEndpoints++;
+								logger.info(
+									`[depth ${result.depth}] ARCHIVE ENDPOINT: ${result.url} (${result.moniker || 'unknown'})`
+								);
+							}
 						}
 						goodIPs[new URL(result.url).hostname] = Date.now();
 
@@ -1113,11 +1302,7 @@ export async function crawlNetwork(
 					PEER_SCAN_PORTS,
 					checkHostPort,
 					'RPC',
-					{
-						expandedPorts: EXPANDED_RPC_PORTS,
-						requireLiveForExpanded: true,
-						deadline: crawlDeadline,
-					}
+					rpcScanOptions(crawlDeadline, fullScannedHosts)
 				);
 				for (const endpoint of validEndpoints) {
 					if (!checkedUrls.has(endpoint)) {
@@ -1162,13 +1347,24 @@ export async function crawlNetwork(
 					timeoutSec: Math.min(PEX_TIMEOUT_SEC, Math.max(5, remainingSec)),
 				});
 				if (pexPeers.length > 0) {
-					const hosts = pexPeers.map((p) => ({ host: p.ip, isIp: true }));
+					let candidates = pexPeers;
+					if (config.crawler.pexVerify) {
+						const verified = await filterReachablePexPeers(pexPeers, tcpProbe, crawlDeadline);
+						candidates = verified.kept;
+						logger.info(
+							`PEX reachability: kept ${verified.kept.length}, dropped ${verified.dropped} refused peers`
+						);
+					}
+					const hosts = candidates.map((p) => ({ host: p.ip, isIp: true }));
 					const [pexRpc, pexRest] = await Promise.all([
-						scanPeers(hosts, expectedChainId, PEER_SCAN_PORTS, checkHostPort, 'PEX-RPC', {
-							expandedPorts: EXPANDED_RPC_PORTS,
-							requireLiveForExpanded: true,
-							deadline: crawlDeadline,
-						}),
+						scanPeers(
+							hosts,
+							expectedChainId,
+							PEER_SCAN_PORTS,
+							checkHostPort,
+							'PEX-RPC',
+							rpcScanOptions(crawlDeadline, fullScannedHosts)
+						),
 						scanPeers(hosts, expectedChainId, REST_SCAN_PORTS, checkRestHostPort, 'PEX-REST', {
 							deadline: crawlDeadline,
 						}),
@@ -1186,7 +1382,7 @@ export async function crawlNetwork(
 						}
 					}
 					logger.info(
-						`PEX expansion: ${pexPeers.length} peers -> ${pexRpc.length} RPC, ${pexRest.length} REST endpoints`
+						`PEX expansion: ${candidates.length} peers -> ${pexRpc.length} RPC, ${pexRest.length} REST endpoints`
 					);
 				}
 			}
@@ -1205,6 +1401,12 @@ export async function crawlNetwork(
 	} catch (err) {
 		logger.error(`Unexpected error during crawl for ${chainName}`, err);
 	} finally {
+		// Keep archive metadata aligned with the endpoints that survived; avoid
+		// writing an empty array onto every chain.
+		const archives = (chainsData[chainName].archiveRpcAddresses || []).filter((url) =>
+			chainsData[chainName].rpcAddresses.includes(url)
+		);
+		chainsData[chainName].archiveRpcAddresses = archives.length > 0 ? archives : undefined;
 		saveChainsData(chainsData);
 		saveGoodIPs(goodIPs);
 		saveRejectedIPs([...rejectedIPs]);
@@ -1222,6 +1424,7 @@ export async function crawlNetwork(
 	logger.info(`New REST endpoints: ${newRestEndpoints}`);
 	logger.info(`Total REST endpoints: ${totalRestEndpoints}`);
 	logger.info(`Misplaced endpoints: ${misplacedEndpoints}`);
+	logger.info(`Archive endpoints: ${chainsData[chainName].archiveRpcAddresses?.length || 0}`);
 	logger.info(`URLs checked: ${checkedUrls.size}`);
 	logger.info(`Duplicate nodes skipped: ${skippedDuplicateNodes}`);
 
@@ -1231,6 +1434,7 @@ export async function crawlNetwork(
 		misplacedEndpoints,
 		newRestEndpoints,
 		totalRestEndpoints,
+		archiveEndpoints,
 	};
 }
 

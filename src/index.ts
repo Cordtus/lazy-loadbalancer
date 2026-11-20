@@ -147,6 +147,8 @@ api.get('/rpc-list/:chainName', async (c) => {
 		rpcList: chainData.rpcAddresses,
 		restCount: chainData.restAddresses?.length || 0,
 		restList: chainData.restAddresses || [],
+		archiveCount: chainData.archiveRpcAddresses?.length || 0,
+		archiveList: chainData.archiveRpcAddresses || [],
 	});
 });
 

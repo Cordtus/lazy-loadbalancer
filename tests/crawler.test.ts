@@ -5,8 +5,11 @@ import {
 	buildExpandedPorts,
 	buildRestEndpointCandidates,
 	_test_extractPeerInfo as extractPeerInfo,
+	_test_filterReachablePexPeers as filterPexPeers,
+	isArchiveStatus,
 	parseRestNodeInfoChainId,
 	_test_scanPeers as scanPeers,
+	_test_scanPorts as scanPorts,
 	_test_tcpProbe as tcpProbe,
 	_test_tcpReachable as tcpReachable,
 } from '../src/crawler';
@@ -633,6 +636,57 @@ describe('Crawler Peer Extraction', () => {
 	});
 });
 
+describe('Archive detection', () => {
+	const status = (earliest: string | number | undefined) => ({
+		result: {
+			node_info: { network: 'test-1' },
+			sync_info: {
+				latest_block_time: new Date().toISOString(),
+				latest_block_height: '1000',
+				earliest_block_height: earliest,
+			},
+		},
+	});
+
+	it('treats earliest block height 1 as an archive node', () => {
+		expect(isArchiveStatus(status('1'))).toBe(true);
+		expect(isArchiveStatus(status(1))).toBe(true);
+		expect(isArchiveStatus(status('100'))).toBe(false);
+		expect(isArchiveStatus(status(undefined))).toBe(false);
+		expect(isArchiveStatus(null)).toBe(false);
+	});
+});
+
+describe('PEX reachability filter', () => {
+	it('drops actively refused peers but keeps open and ambiguous ones', async () => {
+		const statuses: Record<string, 'open' | 'closed' | 'dark'> = {
+			'1.1.1.1:26656': 'open',
+			'2.2.2.2:26656': 'closed',
+			'3.3.3.3:26656': 'dark',
+		};
+		const probe = async (host: string, port: number) => statuses[`${host}:${port}`] ?? 'closed';
+		const peers = [
+			{ id: 'a', ip: '1.1.1.1', port: 26656 },
+			{ id: 'b', ip: '2.2.2.2', port: 26656 },
+			{ id: 'c', ip: '3.3.3.3', port: 26656 },
+		];
+
+		const { kept, dropped } = await filterPexPeers(peers, probe);
+		expect(kept.map((p) => p.ip)).toEqual(['1.1.1.1', '3.3.3.3']);
+		expect(dropped).toBe(1);
+	});
+
+	it('fails open once the deadline has passed', async () => {
+		const peers = [{ id: 'a', ip: '1.1.1.1', port: 26656 }];
+		const probe = async () => {
+			throw new Error('should not probe past the deadline');
+		};
+		const { kept, dropped } = await filterPexPeers(peers, probe, Date.now() - 1);
+		expect(kept).toEqual(peers);
+		expect(dropped).toBe(0);
+	});
+});
+
 describe('Status Response Parsing', () => {
 	it('should extract chain_id from snake_case response', () => {
 		const response = createMockStatusResponse('cosmoshub-4', 'node123', 'TestNode');
@@ -768,6 +822,42 @@ describe('scanPeers expanded sweep', () => {
 
 		expect(probed).not.toContain(26607);
 	});
+
+	it('full-scans only remaining IP hosts, records them as seen, and stops on a hit', async () => {
+		const scanned: string[] = [];
+		const probe = async (host: string, port: number) => {
+			if (host === '2.2.2.2' && port === 54321) {
+				return { endpoint: `http://${host}:${port}`, dark: false };
+			}
+			return { endpoint: null, dark: false };
+		};
+		const seen = new Set<string>();
+
+		const found = await scanPeers(
+			[makePeer('1.1.1.1'), makePeer('2.2.2.2'), { host: 'rpc.example.com', isIp: false }],
+			'chain-1',
+			[443],
+			probe,
+			'test',
+			{
+				fullScan: {
+					hosts: 5,
+					timeoutMs: 10,
+					concurrency: 4,
+					seen,
+					scanner: async (host) => {
+						scanned.push(host);
+						return host === '2.2.2.2' ? [22, 54321] : [22];
+					},
+				},
+			}
+		);
+
+		// Hostnames are skipped; each IP host is scanned once.
+		expect(scanned).toEqual(['1.1.1.1', '2.2.2.2']);
+		expect(seen).toEqual(new Set(['1.1.1.1', '2.2.2.2']));
+		expect(found).toContain('http://2.2.2.2:54321');
+	});
 });
 
 describe('TCP reachability probe', () => {
@@ -780,6 +870,25 @@ describe('TCP reachability probe', () => {
 
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		expect(await tcpReachable('127.0.0.1', port)).toBe(false);
+	});
+
+	it('scanPorts returns only open ports from an explicit list', async () => {
+		const server = net.createServer();
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const openPort = (server.address() as net.AddressInfo).port;
+
+		const closedServer = net.createServer();
+		await new Promise<void>((resolve) => closedServer.listen(0, '127.0.0.1', resolve));
+		const closedPort = (closedServer.address() as net.AddressInfo).port;
+		await new Promise<void>((resolve) => closedServer.close(() => resolve()));
+
+		expect(await scanPorts('127.0.0.1', [closedPort, openPort], 500, 8)).toEqual([openPort]);
+		// Concurrency larger than the port list must still terminate.
+		expect(await scanPorts('127.0.0.1', [openPort], 500, 100)).toEqual([openPort]);
+		// An expired deadline short-circuits before probing anything.
+		expect(await scanPorts('127.0.0.1', [openPort], 500, 8, Date.now() - 1)).toEqual([]);
+
+		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
 });
 

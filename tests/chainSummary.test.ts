@@ -11,6 +11,7 @@ describe('chain summaries', () => {
 					bech32Prefix: 'cosmos',
 					rpcAddresses: ['https://rpc.example.com'],
 					restAddresses: ['https://rest.example.com', 'https://rest2.example.com'],
+					archiveRpcAddresses: ['https://rpc.example.com'],
 					timestamp: 1700000000000,
 				},
 			})
@@ -22,6 +23,7 @@ describe('chain summaries', () => {
 				endpointCount: 3,
 				rpcCount: 1,
 				restCount: 2,
+				archiveCount: 1,
 				source: 'chain-registry',
 				timestamp: 1700000000000,
 			},

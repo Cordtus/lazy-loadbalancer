@@ -41,8 +41,8 @@ curl http://localhost:3000/lb/cosmoshub/ibc/apps/transfer/v1/channels/channel-14
 | GET | `/stats` | Per-chain, per-route endpoint stats |
 | GET | `/stats/:chain` | Stats for one chain |
 | GET | `/api/chain-list` | Chain names |
-| GET | `/api/chains-summary` | Chains with RPC/REST endpoint counts |
-| GET | `/api/rpc-list/:chain` | Full RPC and REST endpoint lists |
+| GET | `/api/chains-summary` | Chains with RPC/REST/archive endpoint counts |
+| GET | `/api/rpc-list/:chain` | Full RPC, REST, and archive endpoint lists |
 | GET | `/api/ibc-links?source=&destination=` | IBC channel links between two chains (name or chain ID) |
 | POST | `/api/update-chain/:chain` | Crawl and update one chain (blocking) |
 | POST | `/api/update-all-chains` | Crawl and update every chain (blocking) |
@@ -67,6 +67,11 @@ Environment variables (all optional):
 | `CRAWLER_MAX_DEPTH` | `3` | Peer-crawl depth |
 | `CRAWLER_EXPANDED_PORTS` | `40` | RPC ports swept per live host during the expanded sweep; `0` disables |
 | `CRAWLER_DARK_THRESHOLD` | `3` | Expanded sweep: consecutive timeouts before a host is dropped |
+| `CRAWLER_FULL_SCAN` | `false` | Opt-in 1–65535 TCP scan of live IP hosts still missing an endpoint |
+| `CRAWLER_FULL_SCAN_HOSTS` | `2` | Max hosts full-scanned per crawl (each host at most once) |
+| `CRAWLER_FULL_SCAN_TIMEOUT_MS` | `500` | Per-port connect timeout; must exceed the host RTT |
+| `CRAWLER_FULL_SCAN_CONCURRENCY` | `128` | Parallel connects during the full scan |
+| `PEX_VERIFY` | `true` | Drop gossiped peers whose P2P port actively refuses connections |
 | `NODE_ENV` | unset | `production` disables config hot reload and hides error details |
 | `LOG_LEVEL` / `LOG_LEVEL_APP` / `LOG_LEVEL_CRAWLER` / `LOG_LEVEL_BALANCER` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 
@@ -83,9 +88,14 @@ PEX_MAX_QUERIES=3            # PexRequests per peer
 PEX_MAX_DIALS=256            # total dial budget per crawl
 PEX_DIAL_ATTEMPTS=2          # dial retries per peer
 PEX_CONCURRENCY=16           # parallel dials
+PEX_VERIFY=true              # drop peers that actively refuse a connection
 ```
 
-RPC hosts that stay dark on the common ports get digit substitutions and permutations of `26657` (e.g. `26607`, `36657`, `25667`), closest-first, after a TCP liveness check, clipped to `CRAWLER_EXPANDED_PORTS`.
+Gossiped peers are TCP-checked on their advertised P2P port: actively refused peers are dropped, while timeouts are kept (a firewalled node can still expose RPC). `PEX_VERIFY=false` skips that pass.
+
+RPC hosts that stay dark on the common ports get digit substitutions and permutations of `26657` (e.g. `26607`, `36657`, `25667`), closest-first, after a TCP liveness check, clipped to `CRAWLER_EXPANDED_PORTS`. As a last resort, `CRAWLER_FULL_SCAN=true` scans all 65,535 ports on up to `CRAWLER_FULL_SCAN_HOSTS` live IP hosts that still have no endpoint. Each host is scanned at most once per crawl, hostnames are skipped (their IP siblings are already probed), at most 20 open ports are HTTP-probed, and the whole pass stops at the crawl deadline. It is a real port scan from the remote operator's point of view; leave it off unless you need it.
+
+Endpoints whose `/status` reports `earliest_block_height == 1` are recorded as archive nodes in `archiveRpcAddresses` and surfaced as `archiveList`/`archiveCount` by `/api/rpc-list/:chain` and `/api/chains-summary`.
 
 ## Development
 

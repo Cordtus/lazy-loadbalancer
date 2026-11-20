@@ -13,6 +13,7 @@ export function summarizeChains(chainsData: Record<string, ChainEntry>): ChainSu
 				endpointCount: rpcCount + restCount,
 				rpcCount,
 				restCount,
+				archiveCount: data.archiveRpcAddresses?.length || 0,
 				source: 'chain-registry' as const,
 				timestamp: data.timestamp,
 				lastUpdated: data.lastUpdated,

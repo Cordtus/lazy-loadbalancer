@@ -226,6 +226,13 @@ export function envInt(name: string, fallback: number): number {
 	return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+// Accepts 1/true/yes/on (any case) as true; everything else is false.
+export function envBool(name: string, fallback: boolean): boolean {
+	const raw = process.env[name];
+	if (raw === undefined || raw === '') return fallback;
+	return !['0', 'false', 'no', 'off'].includes(raw.trim().toLowerCase());
+}
+
 // Static config from env
 export const staticConfig = {
 	port: Number(process.env.PORT) || 3000,
@@ -244,6 +251,13 @@ export const staticConfig = {
 		expandedPorts: envInt('CRAWLER_EXPANDED_PORTS', 40),
 		// Consecutive "dark" (timeout) ports before a host is dropped in the expanded sweep.
 		darkThreshold: envInt('CRAWLER_DARK_THRESHOLD', 3),
+		// Drop PEX peers whose advertised P2P port actively refuses connections.
+		pexVerify: envBool('PEX_VERIFY', true),
+		// Expensive 1-65535 TCP scan of live hosts still missing RPC (off by default).
+		fullScan: envBool('CRAWLER_FULL_SCAN', false),
+		fullScanHosts: envInt('CRAWLER_FULL_SCAN_HOSTS', 2),
+		fullScanTimeoutMs: envInt('CRAWLER_FULL_SCAN_TIMEOUT_MS', 500),
+		fullScanConcurrency: envInt('CRAWLER_FULL_SCAN_CONCURRENCY', 128),
 	},
 };
 
